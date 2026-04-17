@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nvdyn"
+version = "0.1.0"
+description = "Pulse-level NV-center spin dynamics simulation with QuTiP."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "OpenAI Codex" },
+]
+dependencies = [
+  "numpy>=1.26",
+  "qutip==5.2.3",
+]
+
+[project.optional-dependencies]
+parallel = [
+  "loky",
+]
+dev = [
+  "pytest>=8",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"

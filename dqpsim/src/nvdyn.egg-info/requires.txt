@@ -1,0 +1,8 @@
+numpy>=1.26
+qutip==5.2.3
+
+[dev]
+pytest>=8
+
+[parallel]
+loky
