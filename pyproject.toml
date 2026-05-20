@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sali-pycce-prototype"
+version = "0.1.0"
+description = "Functional SALI-style signal-to-image model for NV-center CPMG nuclear spin detection."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Prototype generated with ChatGPT"}]
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.10",
+    "torch>=2.0",
+    "tqdm>=4.64",
+    "matplotlib>=3.6",
+]
+
+[project.optional-dependencies]
+pycce = ["pycce>=1.1"]
+dev = ["pytest>=7", "ruff>=0.4"]
+
+[project.scripts]
+sali-train = "sali_pycce.train:main"
+sali-eval = "sali_pycce.evaluate:main"
+sali-demo-dataset = "sali_pycce.make_dataset:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
