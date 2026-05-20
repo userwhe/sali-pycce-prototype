@@ -1,0 +1,7 @@
+numpy>=1.23
+scipy>=1.10
+torch>=2.0
+tqdm>=4.64
+matplotlib>=3.6
+# Optional, for PyCCE-backed simulations:
+# pycce>=1.1
