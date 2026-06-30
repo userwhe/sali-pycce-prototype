@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy import ndimage
+from scipy.optimize import linear_sum_assignment
 
 from .physics import SpinParams
 
@@ -112,7 +113,7 @@ def nearest_match_errors(
     pred: list[dict[str, float]],
     max_dist_khz: float = 5.0,
 ) -> dict[str, float]:
-    """Simple one-to-one nearest-neighbor matching for quick evaluation."""
+    """Optimal one-to-one thresholded matching for quick evaluation."""
     truth = np.asarray(truth, dtype=float).reshape(-1, 2)
     pred_arr = np.asarray([[p["az_khz"], p["aperp_khz"]] for p in pred], dtype=float).reshape(-1, 2)
     if len(truth) == 0 and len(pred_arr) == 0:
@@ -123,23 +124,25 @@ def nearest_match_errors(
         return {"tp": 0.0, "fp": 0.0, "fn": float(len(truth)), "mae_khz": float("nan")}
 
     dists = np.linalg.norm(truth[:, None, :] - pred_arr[None, :, :], axis=-1)
-    used_truth: set[int] = set()
-    used_pred: set[int] = set()
-    errors: list[float] = []
-
-    while True:
-        i, j = np.unravel_index(np.argmin(dists), dists.shape)
-        if not np.isfinite(dists[i, j]) or dists[i, j] > max_dist_khz:
-            break
-        used_truth.add(int(i))
-        used_pred.add(int(j))
-        errors.append(float(np.mean(np.abs(truth[i] - pred_arr[j]))))
-        dists[i, :] = np.inf
-        dists[:, j] = np.inf
+    valid = np.isfinite(dists) & (dists <= max_dist_khz)
+    if np.isfinite(max_dist_khz):
+        scale = max(float(max_dist_khz), 0.0)
+    else:
+        valid_dists = dists[valid]
+        scale = float(np.max(valid_dists)) if valid_dists.size else 0.0
+    # Larger than any all-valid assignment, so valid match count wins first.
+    invalid_cost = (min(len(truth), len(pred_arr)) + 1) * (scale + 1.0)
+    costs = np.where(valid, dists, invalid_cost)
+    truth_idx, pred_idx = linear_sum_assignment(costs)
+    errors = [
+        float(np.mean(np.abs(truth[i] - pred_arr[j])))
+        for i, j in zip(truth_idx, pred_idx, strict=True)
+        if valid[i, j]
+    ]
 
     tp = len(errors)
-    fp = len(pred_arr) - len(used_pred)
-    fn = len(truth) - len(used_truth)
+    fp = len(pred_arr) - tp
+    fn = len(truth) - tp
     return {
         "tp": float(tp),
         "fp": float(fp),

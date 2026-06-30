@@ -14,7 +14,9 @@ def compute_detection_metrics(
     pred: list[dict[str, float]],
     max_dist_khz: float = 5.0,
 ) -> dict[str, float]:
-    counts = nearest_match_errors(truth, pred, max_dist_khz=max_dist_khz)
+    truth_arr = np.asarray(truth, dtype=float).reshape(-1, 2)
+    truth_arr = truth_arr[np.isfinite(truth_arr).all(axis=1)]
+    counts = nearest_match_errors(truth_arr, pred, max_dist_khz=max_dist_khz)
     tp = counts["tp"]
     fp = counts["fp"]
     fn = counts["fn"]
@@ -32,7 +34,20 @@ def aggregate_detection_metrics(rows: Sequence[dict[str, float]]) -> dict[str, f
     tp = float(sum(row["tp"] for row in rows))
     fp = float(sum(row["fp"] for row in rows))
     fn = float(sum(row["fn"] for row in rows))
-    maes = [row["mae_khz"] for row in rows if np.isfinite(row["mae_khz"])]
+    mae_weight = float(
+        sum(
+            row["mae_khz"] * row["tp"]
+            for row in rows
+            if row["tp"] > 0 and np.isfinite(row["mae_khz"])
+        )
+    )
+    mae_tp = float(
+        sum(
+            row["tp"]
+            for row in rows
+            if row["tp"] > 0 and np.isfinite(row["mae_khz"])
+        )
+    )
     precision = tp / (tp + fp) if tp + fp > 0 else 0.0
     recall = tp / (tp + fn) if tp + fn > 0 else 0.0
     return {
@@ -41,7 +56,7 @@ def aggregate_detection_metrics(rows: Sequence[dict[str, float]]) -> dict[str, f
         "fn": fn,
         "precision": float(precision),
         "recall": float(recall),
-        "mae_khz": float(np.mean(maes)) if maes else float("nan"),
+        "mae_khz": mae_weight / mae_tp if mae_tp > 0 else float("nan"),
     }
 
 
