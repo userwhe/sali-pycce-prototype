@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a reproducible SALI-PyCCE research pipeline that trains on analytic noisy CPMG traces, tests on PyCCE random C13 spin baths, and compares against the local N=32 algorithmic decomposition baseline.
+**Goal:** Build a reproducible SALI-PyCCE research pipeline that trains on analytic noisy CPMG traces, validates during training, evaluates on held-out analytic test data, benchmarks on PyCCE random C13 spin baths, and compares against the local N=32 algorithmic decomposition baseline.
 
-**Architecture:** Add a small configuration layer for research/smoke presets, make the simulator/model/heatmap code shape-configurable, persist train and validation metrics, and add focused modules for tensor projection, baseline adaptation, PyCCE benchmark generation, visualization, and Colab CLI execution. Keep each module independently testable and route notebook work through reusable Python APIs and CLIs.
+**Architecture:** Add a small configuration layer for research/smoke presets, make the simulator/model/heatmap code shape-configurable, persist train, validation, and analytic-test metrics, and add focused modules for tensor projection, baseline adaptation, PyCCE benchmark generation, visualization, and Colab CLI execution. Keep each module independently testable and route notebook work through reusable Python APIs and CLIs.
 
 **Tech Stack:** Python 3.10+, NumPy, SciPy, PyTorch, Matplotlib, PyCCE, pytest, Google Colab CLI.
 
@@ -13,7 +13,7 @@
 ## File Structure
 
 - Create `src/sali_pycce/config.py`
-  - Owns research, Colab-medium, and smoke presets.
+  - Owns research, Colab-medium, and smoke presets, including train/validation/analytic-test counts.
   - Builds `HeatmapSpec` and `AnalyticCPMGSimulator` from a single config object.
 - Modify `src/sali_pycce/physics.py`
   - Adds stretched `T2` decoherence support.
@@ -33,7 +33,7 @@
   - Adds presets and full research configuration CLI arguments.
   - Writes checkpoint plus CSV history.
 - Modify `src/sali_pycce/evaluate.py`
-  - Uses shared metrics and supports threshold sweeps.
+  - Uses shared metrics and supports held-out analytic test evaluation and threshold sweeps.
 - Create `src/sali_pycce/visualize.py`
   - Provides notebook/report plotting helpers.
 - Create `src/sali_pycce/tensor.py`
@@ -57,15 +57,17 @@
   - `tests/test_pycce_benchmark.py`
   - Update existing `tests/test_physics.py`, `tests/test_heatmap.py`, and `tests/test_model.py`.
 
-## Training Counts
+## Dataset Split Counts
 
 Use staged dataset sizes:
 
-- Smoke: `512` train / `128` validation
-- Colab medium: `20_000` train / `2_000` validation
-- First research run: `100_000` train / `10_000` validation
+- Smoke: `512` train / `128` validation / `128` analytic test
+- Colab medium: `20_000` train / `2_000` validation / `2_000` analytic test
+- First research run: `100_000` train / `10_000` validation / `10_000` analytic test
 
-All training data remains generated on the fly by deterministic index seeds. Do not store all analytic training traces unless a future experiment explicitly asks for cached data.
+All analytic split data remains generated on the fly by deterministic index seeds. Use distinct seed offsets for train, validation, and analytic test splits. Do not store all analytic training traces unless a future experiment explicitly asks for cached data.
+
+The PyCCE random-bath benchmark is a separate physics-domain test set, not a replacement for the held-out analytic test split. Use one PyCCE sample for smoke, ten samples for Colab-medium benchmarking, and one hundred samples for the first research benchmark unless runtime forces a smaller first pass.
 
 ## PyCCE API Notes
 
@@ -109,6 +111,7 @@ def test_research_config_matches_approved_defaults():
     assert RESEARCH_CONFIG.t2_us == 800.0
     assert RESEARCH_CONFIG.train_samples == 100_000
     assert RESEARCH_CONFIG.val_samples == 10_000
+    assert RESEARCH_CONFIG.test_samples == 10_000
 
 
 def test_presets_build_consistent_simulator_and_heatmap_spec():
@@ -131,6 +134,8 @@ def test_smoke_and_colab_medium_have_smaller_counts_than_research():
     assert COLAB_MEDIUM_CONFIG.train_samples < RESEARCH_CONFIG.train_samples
     assert SMOKE_CONFIG.val_samples < COLAB_MEDIUM_CONFIG.val_samples
     assert COLAB_MEDIUM_CONFIG.val_samples < RESEARCH_CONFIG.val_samples
+    assert SMOKE_CONFIG.test_samples < COLAB_MEDIUM_CONFIG.test_samples
+    assert COLAB_MEDIUM_CONFIG.test_samples < RESEARCH_CONFIG.test_samples
 
 
 def test_research_tau_grid_is_zero_to_forty_us():
@@ -200,6 +205,7 @@ class PipelineConfig:
     name: str
     train_samples: int
     val_samples: int
+    test_samples: int
     max_spins: int
     min_spins: int
     b_gauss: float = 525.0
@@ -243,6 +249,7 @@ SMOKE_CONFIG = PipelineConfig(
     name="smoke",
     train_samples=512,
     val_samples=128,
+    test_samples=128,
     max_spins=5,
     min_spins=1,
     signal_points=256,
@@ -255,6 +262,7 @@ COLAB_MEDIUM_CONFIG = PipelineConfig(
     name="colab-medium",
     train_samples=20_000,
     val_samples=2_000,
+    test_samples=2_000,
     max_spins=10,
     min_spins=1,
 )
@@ -263,6 +271,7 @@ RESEARCH_CONFIG = PipelineConfig(
     name="research",
     train_samples=100_000,
     val_samples=10_000,
+    test_samples=10_000,
     max_spins=20,
     min_spins=1,
 )
@@ -883,6 +892,65 @@ def test_evaluate_writes_json_metrics(tmp_path):
     assert {"samples", "tp", "fp", "fn", "precision", "recall", "matched_mae_khz"}.issubset(
         payload.keys()
     )
+
+
+def test_evaluate_uses_preset_test_samples_when_samples_omitted(tmp_path):
+    checkpoint = tmp_path / "toy.pt"
+    metrics = tmp_path / "metrics.json"
+
+    train_main(
+        [
+            "--preset",
+            "smoke",
+            "--train-samples",
+            "8",
+            "--val-samples",
+            "4",
+            "--test-samples",
+            "128",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "2",
+            "--signal-points",
+            "64",
+            "--heatmap-height",
+            "32",
+            "--heatmap-width",
+            "64",
+            "--max-spins",
+            "2",
+            "--device",
+            "cpu",
+            "--out",
+            str(checkpoint),
+            "--threads",
+            "1",
+        ]
+    )
+    evaluate_main(
+        [
+            "--preset",
+            "smoke",
+            "--checkpoint",
+            str(checkpoint),
+            "--batch-size",
+            "64",
+            "--signal-points",
+            "64",
+            "--max-spins",
+            "2",
+            "--device",
+            "cpu",
+            "--metrics-out",
+            str(metrics),
+            "--threads",
+            "1",
+        ]
+    )
+
+    payload = json.loads(metrics.read_text())
+    assert payload["samples"] == 128
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -917,6 +985,7 @@ Add parser arguments:
 ```python
 p.add_argument("--train-samples", type=int, default=None)
 p.add_argument("--val-samples", type=int, default=None)
+p.add_argument("--test-samples", type=int, default=None)
 p.add_argument("--signal-points", type=int, default=None)
 p.add_argument("--max-spins", type=int, default=None)
 p.add_argument("--min-spins", type=int, default=None)
@@ -943,7 +1012,7 @@ Add this helper near `make_loaders()`:
 ```python
 def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
     preset = PRESETS[args.preset]
-    for name in ("train_samples", "val_samples", "signal_points", "max_spins", "min_spins", "b_gauss", "shots"):
+    for name in ("train_samples", "val_samples", "test_samples", "signal_points", "max_spins", "min_spins", "b_gauss", "shots"):
         if getattr(args, name) is None:
             setattr(args, name, getattr(preset, name))
     if args.tau_start_us is None:
@@ -1049,10 +1118,34 @@ with history_out.open("w", newline="") as handle:
 
 - [ ] **Step 5: Add metrics JSON support to `evaluate.py`**
 
+Modify imports in `src/sali_pycce/evaluate.py`:
+
+```python
+import json
+
+from .config import PRESETS
+```
+
 Add parser argument:
 
 ```python
+p.add_argument("--preset", choices=sorted(PRESETS), default="smoke")
 p.add_argument("--metrics-out", default=None)
+```
+
+Change the existing `--samples` argument default to `None`:
+
+```python
+p.add_argument("--samples", type=int, default=None)
+```
+
+After loading the checkpoint in `evaluate.py`, resolve the held-out analytic test sample count:
+
+```python
+preset = PRESETS[args.preset]
+if args.samples is None:
+    ckpt_args = ckpt.get("args", {})
+    args.samples = int(ckpt_args.get("test_samples", preset.test_samples))
 ```
 
 After computing metrics:
@@ -1071,8 +1164,6 @@ if args.metrics_out:
     Path(args.metrics_out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.metrics_out).write_text(json.dumps(payload, indent=2) + "\n")
 ```
-
-Add `import json`.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
@@ -2202,7 +2293,7 @@ Add a section:
 ```markdown
 ## Research Pipeline Defaults
 
-The research workflow trains on analytic/noisy CPMG traces and tests on PyCCE random spin baths.
+The research workflow trains on analytic/noisy CPMG traces, validates during training, evaluates on held-out analytic test data, and benchmarks on PyCCE random spin baths.
 
 - B field: `Bz = 525 G`
 - CPMG traces: `N=32` and `N=256`
@@ -2210,10 +2301,10 @@ The research workflow trains on analytic/noisy CPMG traces and tests on PyCCE ra
 - Label grid: `128 x 256`
 - Label range: `A_z = [-250, 250] kHz`, `A_perp = [2, 250] kHz`
 - Noise: binomial shot noise plus configurable `T2`, default `800 us`
-- Training counts:
-  - smoke: `512/128`
-  - Colab medium: `20_000/2_000`
-  - first research run: `100_000/10_000`
+- Split counts:
+  - smoke: `512/128/128` train/validation/analytic-test
+  - Colab medium: `20_000/2_000/2_000` train/validation/analytic-test
+  - first research run: `100_000/10_000/10_000` train/validation/analytic-test
 
 Train:
 

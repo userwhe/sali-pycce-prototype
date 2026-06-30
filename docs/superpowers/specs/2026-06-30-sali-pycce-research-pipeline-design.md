@@ -4,7 +4,7 @@ Date: 2026-06-30
 
 ## Goal
 
-Extend the existing SALI-PyCCE prototype into a modular research pipeline that trains an AI model to identify C13 nuclear spin parameters from CPMG data, then tests the model on PyCCE-generated random spin baths and compares it with the local algorithmic decomposition method in `/Users/weitao/Code/python/dqpmodel/cpmg_model`.
+Extend the existing SALI-PyCCE prototype into a modular research pipeline that trains an AI model to identify C13 nuclear spin parameters from CPMG data, validates it during training, tests it on held-out analytic/noisy data, then benchmarks it on PyCCE-generated random spin baths and compares it with the local algorithmic decomposition method in `/Users/weitao/Code/python/dqpmodel/cpmg_model`.
 
 The approved strategy is analytic/noisy training plus PyCCE testing. Training data should be fast enough to generate at scale, while PyCCE is used as an independent physics-domain benchmark.
 
@@ -45,7 +45,7 @@ The pipeline should be split into small modules with clear interfaces:
 
 Data flow:
 
-1. Generate analytic CPMG traces with shot noise and NV decoherence.
+1. Generate deterministic analytic train, validation, and held-out test CPMG splits with shot noise and NV decoherence.
 2. Generate true spin lists and Gaussian heatmap labels.
 3. Train the two-input SALI model on `N=32` and `N=256` traces.
 4. Decode predicted heatmaps into spin parameter estimates.
@@ -55,9 +55,9 @@ Data flow:
 8. Score both methods with the same nearest-neighbor matcher over detectable spins.
 9. Display required figures in the notebook and save machine-readable results.
 
-## Training Data And Labels
+## Dataset Splits And Labels
 
-Training data uses the analytic simulator, not PyCCE.
+Training, validation, and same-distribution test data use the analytic simulator, not PyCCE. The PyCCE random-bath benchmark is a separate physics-domain test set.
 
 Default research configuration:
 
@@ -70,7 +70,13 @@ Default research configuration:
 - Noise: binomial shot noise with configurable shot count
 - NV decoherence: configurable `T2`, default `800 us`
 
-The simulator should keep fast smoke-test settings available through CLI arguments. The research defaults above should be the defaults used by the Colab notebook.
+Default staged split sizes:
+
+- Smoke: `512` train / `128` validation / `128` analytic test
+- Colab medium: `20_000` train / `2_000` validation / `2_000` analytic test
+- First research run: `100_000` train / `10_000` validation / `10_000` analytic test
+
+The simulator should keep fast smoke-test settings available through CLI arguments. The research defaults above should be the defaults used by the Colab notebook. Train, validation, and analytic test splits must use distinct deterministic seeds so the same index never maps to the same spin configuration across splits.
 
 Each sample should expose:
 
@@ -105,9 +111,11 @@ Training should write:
 
 The first implementation should use MSE heatmap loss to stay aligned with the current prototype. A BCE/MSE hybrid can be added later if the heatmap peaks are too diffuse. Blob decoding and nearest-neighbor matching should provide the spin-level metrics.
 
+After training selects the best checkpoint by validation loss, final analytic test metrics should be computed once on the held-out analytic test split. Those metrics should be reported separately from validation metrics and separately from PyCCE benchmark metrics.
+
 ## PyCCE Testing
 
-PyCCE testing should generate random C13 spin baths independently from analytic training data.
+PyCCE testing should generate random C13 spin baths independently from analytic train, validation, and analytic test data.
 
 For each PyCCE test sample, save:
 
@@ -215,6 +223,12 @@ Shared metrics should support both AI and baseline outputs:
 - Optional per-sample diagnostic output for failure analysis
 
 The matcher should operate in `(A_z, A_perp)` space with a configurable maximum matching distance in kHz.
+
+Report metrics in three buckets:
+
+- Validation: used during training for checkpoint selection and learning curves.
+- Analytic test: same-distribution held-out data, evaluated after checkpoint selection.
+- PyCCE benchmark test: random-bath physics-domain data, evaluated after checkpoint selection and compared with the N=32 decomposition baseline.
 
 ## Testing And Validation
 
