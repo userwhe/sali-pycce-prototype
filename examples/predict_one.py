@@ -12,12 +12,14 @@ from sali_pycce.data import SyntheticSALIDataset
 from sali_pycce.heatmap import HeatmapSpec, decode_heatmap
 from sali_pycce.model import SALINet
 from sali_pycce.physics import AnalyticCPMGSimulator
+from sali_pycce.visualize import plot_heatmap_comparison
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--out", default="runs/prediction_demo.png")
+    p.add_argument("--heatmap-comparison-out", default=None)
     p.add_argument("--signal-points", type=int, default=256)
     p.add_argument("--max-spins", type=int, default=5)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -69,6 +71,8 @@ def main() -> None:
         axes[2].plot(det["col"], det["row"], marker="x")
 
     fig.savefig(out, dpi=160)
+    if args.heatmap_comparison_out:
+        plot_heatmap_comparison(item["heatmap"][0].numpy(), pred, args.heatmap_comparison_out)
     print(f"wrote {out}")
     if detections:
         print("detections:")
