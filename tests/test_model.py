@@ -25,6 +25,11 @@ def test_model_rejects_output_shape_not_divisible_by_eight():
         SALINet(output_shape=(130, 256))
 
 
+def test_model_rejects_degenerate_decoder_base_shape():
+    with pytest.raises(ValueError, match="base spatial area"):
+        SALINet(output_shape=(8, 8))
+
+
 def test_model_rejects_zero_output_shape_height():
     with pytest.raises(ValueError, match="positive"):
         SALINet(output_shape=(0, 64))

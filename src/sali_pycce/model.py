@@ -64,6 +64,8 @@ class SALINet(nn.Module):
             raise ValueError("output_shape height and width must be divisible by 8.")
         self.output_shape = (height, width)
         self.base_shape = (self.output_shape[0] // 8, self.output_shape[1] // 8)
+        if self.base_shape[0] * self.base_shape[1] <= 1:
+            raise ValueError("output_shape decoder base spatial area must be greater than 1.")
         self.branches = nn.ModuleList([SignalBranch(pooled_len=pooled_len) for _ in range(self.n_inputs)])
         branch_dim = 16 * pooled_len
         self.fc = nn.Sequential(
