@@ -35,38 +35,47 @@ class SignalBranch(nn.Module):
 class SALINet(nn.Module):
     """Two-input signal-to-image network.
 
-    Output shape is ``[batch, 1, 32, 64]`` by default.
+    Output shape is ``[batch, 1, 128, 256]`` by default.
     """
 
-    def __init__(self, n_inputs: int = 2, output_shape: tuple[int, int] = (32, 64)) -> None:
+    def __init__(
+        self,
+        n_inputs: int = 2,
+        output_shape: tuple[int, int] = (128, 256),
+        pooled_len: int = 64,
+        decoder_channels: int = 32,
+    ) -> None:
         super().__init__()
-        if output_shape != (32, 64):
-            raise ValueError("This compact prototype currently expects output_shape=(32, 64).")
-        self.n_inputs = n_inputs
-        self.output_shape = output_shape
-        self.branches = nn.ModuleList([SignalBranch() for _ in range(n_inputs)])
-        branch_dim = 16 * 32
+        height, width = output_shape
+        if height % 8 != 0 or width % 8 != 0:
+            raise ValueError("output_shape height and width must be divisible by 8.")
+        self.n_inputs = int(n_inputs)
+        self.output_shape = (int(height), int(width))
+        self.base_shape = (self.output_shape[0] // 8, self.output_shape[1] // 8)
+        self.decoder_channels = int(decoder_channels)
+        self.branches = nn.ModuleList([SignalBranch(pooled_len=pooled_len) for _ in range(self.n_inputs)])
+        branch_dim = 16 * int(pooled_len)
         self.fc = nn.Sequential(
-            nn.Linear(n_inputs * branch_dim, 256),
+            nn.Linear(self.n_inputs * branch_dim, 512),
             nn.ReLU(inplace=True),
             nn.Dropout(0.2),
-            nn.Linear(256, 16 * 4 * 8),
+            nn.Linear(512, self.decoder_channels * self.base_shape[0] * self.base_shape[1]),
             nn.ReLU(inplace=True),
         )
         self.decoder = nn.Sequential(
-            nn.Conv2d(16, 16, kernel_size=3, padding=1),
+            nn.Conv2d(self.decoder_channels, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(16),
             nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(16, 8, kernel_size=4, stride=2, padding=1),  # 8 x 16
+            nn.ConvTranspose2d(16, 8, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(8),
             nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(8, 4, kernel_size=4, stride=2, padding=1),  # 16 x 32
+            nn.ConvTranspose2d(8, 4, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(4),
             nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(4, 2, kernel_size=4, stride=2, padding=1),  # 32 x 64
-            nn.BatchNorm2d(2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(2, 1, kernel_size=3, padding=1),
+            nn.Conv2d(4, 1, kernel_size=3, padding=1),
             nn.Sigmoid(),
         )
 
@@ -85,5 +94,5 @@ class SALINet(nn.Module):
         features = [branch(signals[:, i, :]) for i, branch in enumerate(self.branches)]
         z = torch.cat(features, dim=1)
         z = self.fc(z)
-        z = z.reshape(signals.shape[0], 16, 4, 8)
+        z = z.reshape(signals.shape[0], self.decoder_channels, self.base_shape[0], self.base_shape[1])
         return self.decoder(z)
