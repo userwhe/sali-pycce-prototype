@@ -70,6 +70,7 @@ class SyntheticSALIDataset(Dataset):
 
         return {
             "signals": torch.from_numpy(sample["signals"]).float(),
+            "taus_us": torch.from_numpy(sample["taus_us"]).float(),
             "heatmap": torch.from_numpy(heatmap[None, :, :]).float(),
             "spins": torch.from_numpy(padded).float(),
             "n_spins": torch.tensor(n_spins, dtype=torch.long),
