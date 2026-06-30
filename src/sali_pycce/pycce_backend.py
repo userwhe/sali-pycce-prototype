@@ -28,10 +28,10 @@ class PyCCESimulator:
         adapter is not fully configured.  If False, raises a clear error.
     """
 
-    b_gauss: float = 500.0
+    b_gauss: float = 525.0
     pulses: tuple[int, int] = (32, 256)
-    tau_ranges_us: tuple[tuple[float, float], tuple[float, float]] = ((6.0, 50.0), (10.0, 40.0))
-    signal_points: int = 1000
+    tau_ranges_us: tuple[tuple[float, float], tuple[float, float]] = ((0.0, 40.0), (0.0, 40.0))
+    signal_points: int = 4000
     use_fallback: bool = True
 
     def __post_init__(self) -> None:

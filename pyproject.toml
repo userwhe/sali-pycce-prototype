@@ -25,6 +25,7 @@ dev = ["pytest>=7", "ruff>=0.4"]
 [project.scripts]
 sali-train = "sali_pycce.train:main"
 sali-eval = "sali_pycce.evaluate:main"
+sali-pycce-benchmark = "sali_pycce.pycce_benchmark:main"
 sali-demo-dataset = "sali_pycce.make_dataset:main"
 
 [tool.setuptools.packages.find]
