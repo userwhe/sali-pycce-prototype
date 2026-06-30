@@ -11,13 +11,15 @@ This is a **functional research prototype**, not the original authors' code or t
 ## What is included
 
 - Analytic CPMG simulator for fast synthetic data generation.
-- Optional PyCCE backend scaffold for replacing the analytic simulator with `pycce.Simulator` runs.
+- PyCCE random-bath benchmark generation for physics-domain testing.
 - Synthetic dataset generator with random numbers of nuclei.
 - Gaussian heatmap labels in `(A_z, A_perp)` space.
 - PyTorch 1D-to-2D CNN model.
 - Image postprocessing: thresholding, morphology, connected components, centroids.
-- Training, evaluation, and visualization scripts.
-- Unit tests for the simulator, heatmaps, and model forward pass.
+- Shared precision, recall, MAE, and threshold-sweep metrics.
+- Training, evaluation, Colab, Hyak, and visualization scripts.
+- Adapter for the local `dqpmodel/cpmg_model` decomposition baseline.
+- Unit tests for the simulator, heatmaps, model, metrics, tensor projection, baseline adapter, PyCCE helpers, CLIs, and visualization.
 
 ## Installation
 
@@ -26,7 +28,7 @@ git clone <your-repo-url>
 cd sali-pycce-prototype
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 Optional PyCCE support:
@@ -49,14 +51,13 @@ This trains on a very small toy dataset. It is only meant to verify that the ful
 
 ```bash
 python -m sali_pycce.train \
-  --train-samples 256 \
-  --val-samples 64 \
-  --epochs 2 \
+  --preset smoke \
+  --epochs 1 \
   --batch-size 16 \
-  --signal-points 256 \
-  --max-spins 5 \
   --device cpu \
-  --out checkpoints/toy.pt
+  --out checkpoints/toy.pt \
+  --history-out runs/toy_history.csv \
+  --threads 1
 ```
 
 ## Evaluate
@@ -65,9 +66,10 @@ python -m sali_pycce.train \
 python -m sali_pycce.evaluate \
   --checkpoint checkpoints/toy.pt \
   --samples 32 \
-  --signal-points 256 \
-  --max-spins 5 \
-  --device cpu
+  --batch-size 16 \
+  --device cpu \
+  --metrics-out runs/toy_metrics.json \
+  --threads 1
 ```
 
 ## Make a visual prediction demo
@@ -76,16 +78,94 @@ python -m sali_pycce.evaluate \
 python examples/predict_one.py --checkpoint checkpoints/toy.pt --out runs/prediction_demo.png
 ```
 
-## How this maps to the SALI paper
+## Research Pipeline Defaults
 
-The paper-scale version uses two CPMG inputs, for example `N=32` and `N=256`, each with 1000 points, and output images where every nucleus is a small Gaussian spot in `(A_z, A_perp)` space. This prototype keeps that design but defaults to smaller datasets and shorter signals so it can run on a laptop.
+The research workflow trains on analytic noisy CPMG traces, validates during training, evaluates on held-out analytic test data, and benchmarks on PyCCE random spin baths.
 
-The default output grid is:
+- B field: `Bz = 525 G`
+- CPMG traces: `N=32` and `N=256`
+- Tau grid: `0-40 us`, `4000` points
+- Label grid: `128 x 256`
+- Label range: `A_z = [-250, 250] kHz`, `A_perp = [2, 250] kHz`
+- Noise: binomial shot noise plus configurable `T2`, default `800 us`
+- Split counts:
+  - smoke: `512/128/128` train/validation/analytic-test
+  - Colab medium: `20_000/2_000/2_000` train/validation/analytic-test
+  - first research run: `100_000/10_000/10_000` train/validation/analytic-test
+
+Train:
+
+```bash
+python -m sali_pycce.train \
+  --preset colab-medium \
+  --epochs 20 \
+  --batch-size 128 \
+  --device cuda \
+  --out checkpoints/colab_medium.pt \
+  --history-out runs/colab_medium_history.csv
+```
+
+Evaluate:
+
+```bash
+python -m sali_pycce.evaluate \
+  --checkpoint checkpoints/colab_medium.pt \
+  --samples 500 \
+  --device cuda \
+  --metrics-out runs/colab_medium_metrics.json
+```
+
+PyCCE benchmark:
+
+```bash
+python -m sali_pycce.pycce_benchmark \
+  --out runs/pycce_sample.npz \
+  --bath-number 2000 \
+  --signal-points 4000
+```
+
+If PyCCE is not installed, the benchmark command raises a clear install error. Install optional support with:
+
+```bash
+pip install -e ".[pycce,dev]"
+```
+
+Baseline convention for `/Users/weitao/Code/python/dqpmodel/cpmg_model`:
 
 ```text
-A_z      in [-100, 100] kHz  -> image x-axis
-A_perp   in [2, 102] kHz     -> image y-axis
-shape    32 x 64 pixels by default for laptop speed
+cpmg_model A = -A_par
+cpmg_model B = A_perp
+comparison uses A_z = -A, A_perp = B
+```
+
+## Colab
+
+`notebooks/train_in_colab.ipynb` contains the full Colab workflow and displays the required figures: raw CPMG traces, true spin scatter, ground-truth heatmap, train/validation loss, target-vs-predicted heatmap, and precision/recall/MAE.
+
+Inside a cloned Colab repo, run:
+
+```bash
+python scripts/colab_train.py \
+  --preset colab-medium \
+  --epochs 20 \
+  --batch-size 128 \
+  --checkpoint checkpoints/colab_medium.pt \
+  --history runs/colab_medium_history.csv \
+  --metrics runs/colab_medium_metrics.json
+```
+
+When using the local `colab` CLI from outside the VM, upload or clone the repository into `/content/sali-pycce-prototype` before executing `scripts/colab_train.py`; `colab run` sends only the script file, not the whole worktree.
+
+## How this maps to the SALI paper
+
+The paper-scale version uses two CPMG inputs, for example `N=32` and `N=256`, and output images where every nucleus is a small Gaussian spot in `(A_z, A_perp)` space. This prototype keeps that design and exposes smoke, Colab-medium, and research presets so the same code can run on a laptop or a GPU runtime.
+
+The research output grid is:
+
+```text
+A_z      in [-250, 250] kHz  -> image x-axis
+A_perp   in [2, 250] kHz     -> image y-axis
+shape    128 x 256 pixels
 ```
 
 ## Backend choices
@@ -96,14 +176,14 @@ Fast approximate simulator using the closed-form CPMG expression. This is good f
 
 ### `pycce`
 
-PyCCE is designed for spin-bath coherence simulations using cluster-correlation expansion. This repo includes a `pycce_backend.py` adapter scaffold and a clear interface. For serious physics, replace the adapter internals with your exact bath construction, central spin basis, magnetic field, pulse convention, and CCE order.
+PyCCE is designed for spin-bath coherence simulations using cluster-correlation expansion. This repo includes a `pycce_benchmark.py` random-bath benchmark generator and a `pycce_backend.py` adapter scaffold. For serious physics, validate the exact bath construction, central spin basis, magnetic field, pulse convention, and CCE order.
 
 Example direction:
 
 ```python
 from sali_pycce.pycce_backend import PyCCESimulator
 
-sim = PyCCESimulator(b_gauss=500, pulses=(32, 256), signal_points=1000)
+sim = PyCCESimulator(b_gauss=525, pulses=(32, 256), signal_points=4000)
 # sim.sample(...) should return the same dictionary as AnalyticCPMGSimulator.sample(...)
 ```
 
@@ -111,7 +191,7 @@ sim = PyCCESimulator(b_gauss=500, pulses=(32, 256), signal_points=1000)
 
 1. The analytic simulator is not a substitute for a carefully validated PyCCE calculation.
 2. The network here is intentionally compact and CPU-friendly.
-3. The paper used millions of samples; this repo defaults to toy-scale training.
+3. The smoke preset is only for pipeline checks; use Colab-medium or research presets for meaningful experiments.
 4. The postprocessing thresholds should be tuned for a trained model and target noise level.
 5. A faithful experimental pipeline should include calibration, real noise, finite readout contrast, pulse imperfections, and transfer learning/fine-tuning on real data.
 

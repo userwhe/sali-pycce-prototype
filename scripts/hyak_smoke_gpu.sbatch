@@ -37,21 +37,18 @@ PY
 pytest -q
 
 python -m sali_pycce.train \
-  --train-samples 256 \
-  --val-samples 64 \
+  --preset smoke \
   --epochs 1 \
   --batch-size 16 \
-  --signal-points 128 \
-  --max-spins 3 \
   --device cuda \
   --out checkpoints/hyak_smoke.pt \
+  --history-out runs/hyak_smoke_history.csv \
   --threads ${SLURM_CPUS_PER_TASK:-4}
 
 python -m sali_pycce.evaluate \
   --checkpoint checkpoints/hyak_smoke.pt \
   --samples 32 \
   --batch-size 16 \
-  --signal-points 128 \
-  --max-spins 3 \
   --device cuda \
+  --metrics-out runs/hyak_smoke_metrics.json \
   --threads ${SLURM_CPUS_PER_TASK:-4}

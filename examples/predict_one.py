@@ -20,8 +20,8 @@ def main() -> None:
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--out", default="runs/prediction_demo.png")
     p.add_argument("--heatmap-comparison-out", default=None)
-    p.add_argument("--signal-points", type=int, default=256)
-    p.add_argument("--max-spins", type=int, default=5)
+    p.add_argument("--signal-points", type=int, default=None)
+    p.add_argument("--max-spins", type=int, default=None)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--threads", type=int, default=1)
     args = p.parse_args()
@@ -30,16 +30,35 @@ def main() -> None:
 
     device = str(args.device)
     ckpt = torch.load(args.checkpoint, map_location=device)
+    ckpt_args = ckpt.get("args", {})
     spec = HeatmapSpec(**ckpt.get("heatmap_spec", {}))
     model = SALINet(output_shape=(spec.height, spec.width)).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
 
+    signal_points = args.signal_points or int(ckpt_args.get("signal_points", 256))
+    max_spins = args.max_spins or int(ckpt_args.get("max_spins", 5))
+    min_spins = int(ckpt_args.get("min_spins", 1))
+    tau_range = (
+        float(ckpt_args.get("tau_start_us", 0.0)),
+        float(ckpt_args.get("tau_stop_us", 40.0)),
+    )
     ds = SyntheticSALIDataset(
         1,
-        simulator=AnalyticCPMGSimulator(signal_points=args.signal_points),
+        simulator=AnalyticCPMGSimulator(
+            b_gauss=float(ckpt_args.get("b_gauss", 525.0)),
+            pulses=(32, 256),
+            tau_ranges_us=(tau_range, tau_range),
+            signal_points=signal_points,
+            shots=ckpt_args.get("shots", 1000),
+            t2_us=ckpt_args.get("t2_us", 800.0),
+            t2_stretch=float(ckpt_args.get("t2_stretch", 1.0)),
+        ),
         heatmap_spec=spec,
-        max_spins=args.max_spins,
+        min_spins=min_spins,
+        max_spins=max_spins,
+        az_range=spec.az_range,
+        aperp_range=spec.aperp_range,
         seed=999,
     )
     item = ds[0]

@@ -35,30 +35,26 @@ if torch.cuda.is_available():
 PY
 
 python -m sali_pycce.train \
-  --train-samples 20000 \
-  --val-samples 2000 \
+  --preset colab-medium \
   --epochs 20 \
   --batch-size 128 \
-  --signal-points 512 \
-  --max-spins 10 \
   --device cuda \
   --out checkpoints/hyak_medium.pt \
+  --history-out runs/hyak_medium_history.csv \
   --threads ${SLURM_CPUS_PER_TASK:-8}
 
 python -m sali_pycce.evaluate \
   --checkpoint checkpoints/hyak_medium.pt \
   --samples 500 \
   --batch-size 128 \
-  --signal-points 512 \
-  --max-spins 10 \
   --threshold 0.25 \
   --device cuda \
+  --metrics-out runs/hyak_medium_metrics.json \
   --threads ${SLURM_CPUS_PER_TASK:-8}
 
 python examples/predict_one.py \
   --checkpoint checkpoints/hyak_medium.pt \
-  --signal-points 512 \
-  --max-spins 10 \
   --device cuda \
   --out runs/hyak_prediction_demo.png \
+  --heatmap-comparison-out runs/hyak_heatmap_comparison.png \
   --threads ${SLURM_CPUS_PER_TASK:-8}

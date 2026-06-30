@@ -98,7 +98,7 @@ module load conda
 conda activate /mmfs1/gscratch/scrubbed/whe3/conda/envs/sali-pycce
 nvidia-smi
 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
-python -m sali_pycce.train --train-samples 128 --val-samples 32 --epochs 1 --batch-size 16 --signal-points 128 --max-spins 3 --device cuda --out checkpoints/interactive_smoke.pt
+python -m sali_pycce.train --preset smoke --epochs 1 --batch-size 16 --device cuda --out checkpoints/interactive_smoke.pt --history-out runs/interactive_smoke_history.csv
 exit
 ```
 
@@ -141,10 +141,9 @@ conda activate /mmfs1/gscratch/scrubbed/whe3/conda/envs/sali-pycce
 python -m sali_pycce.evaluate \
   --checkpoint checkpoints/hyak_medium.pt \
   --samples 500 \
-  --signal-points 512 \
-  --max-spins 10 \
   --threshold 0.25 \
-  --device cuda
+  --device cuda \
+  --metrics-out runs/hyak_medium_metrics.json
 ```
 
 Run evaluation inside a GPU allocation or submit a separate Slurm job if it is not small.
