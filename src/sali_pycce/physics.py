@@ -42,16 +42,17 @@ class AnalyticCPMGSimulator:
     nuclei.
     """
 
-    b_gauss: float = 500.0
+    b_gauss: float = 525.0
     pulses: tuple[int, int] = (32, 256)
-    tau_ranges_us: tuple[tuple[float, float], tuple[float, float]] = ((6.0, 50.0), (10.0, 40.0))
-    signal_points: int = 1000
+    tau_ranges_us: tuple[tuple[float, float], tuple[float, float]] = ((0.0, 40.0), (0.0, 40.0))
+    signal_points: int = 4000
     # gamma_13C / 2pi = 10.705 MHz/T = 1.0705 kHz/G
     gamma_c13_khz_per_g: float = 1.0705
     # Factor multiplying A in the conditional nuclear frequency. The Hamiltonian
     # convention in the paper uses an f(t) A/2 term; keep this configurable.
     hyperfine_factor: float = 0.5
-    t2_us: float | None = 200.0
+    t2_us: float | None = 800.0
+    t2_stretch: float = 1.0
     readout_offset: float = 0.0
     readout_visibility: float = 1.0
     shots: int | None = 1000
@@ -115,7 +116,8 @@ class AnalyticCPMGSimulator:
         if self.t2_us is not None and self.t2_us > 0:
             # Simple contrast decay model. This is intentionally separated from
             # the coherent product, so the long-time trace relaxes toward 1/2.
-            contrast = np.exp(-tau_us / self.t2_us)
+            stretch = max(float(self.t2_stretch), 1e-12)
+            contrast = np.exp(-np.power(tau_us / float(self.t2_us), stretch))
             px = 0.5 + (px - 0.5) * contrast
 
         px = self.readout_offset + self.readout_visibility * px
