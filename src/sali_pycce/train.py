@@ -15,6 +15,7 @@ from tqdm import tqdm
 from .config import PRESETS
 from .data import SyntheticSALIDataset
 from .heatmap import HeatmapSpec, decode_heatmap
+from .losses import make_heatmap_loss
 from .metrics import aggregate_detection_metrics, compute_detection_metrics
 from .model import SALINet
 from .physics import AnalyticCPMGSimulator
@@ -44,6 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--t2-us", type=float, default=None)
     p.add_argument("--t2-stretch", type=float, default=None)
     p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--loss", choices=("weighted-mse", "weighted-bce-dice", "weighted-bce", "mse"), default="weighted-mse")
+    p.add_argument("--pos-weight", type=float, default=200.0)
+    p.add_argument("--dice-weight", type=float, default=1.0)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--out", default="checkpoints/sali_toy.pt")
     p.add_argument("--history-out", default=None)
@@ -193,7 +197,7 @@ def main(argv: list[str] | None = None) -> None:
     train_loader, val_loader, spec = make_loaders(args)
     model = SALINet(n_inputs=2, output_shape=(spec.height, spec.width)).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    loss_fn = nn.MSELoss()
+    loss_fn = make_heatmap_loss(args.loss, pos_weight=args.pos_weight, dice_weight=args.dice_weight)
 
     best_val = float("inf")
     history_rows: list[dict[str, float]] = []
@@ -234,7 +238,7 @@ def main(argv: list[str] | None = None) -> None:
             }
         )
         write_history(history_out, history_rows)
-        print(f"epoch={epoch} val_mse={val_loss:.6f}")
+        print(f"epoch={epoch} val_loss={val_loss:.6f}")
         if val_loss < best_val:
             best_val = val_loss
             torch.save(
@@ -242,11 +246,11 @@ def main(argv: list[str] | None = None) -> None:
                     "model_state": model.state_dict(),
                     "args": vars(args),
                     "heatmap_spec": spec.__dict__,
-                    "val_mse": best_val,
+                    "val_loss": best_val,
                 },
                 out,
             )
-            print(f"saved {out} with val_mse={best_val:.6f}")
+            print(f"saved {out} with val_loss={best_val:.6f}")
 
 
 if __name__ == "__main__":

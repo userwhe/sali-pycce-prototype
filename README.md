@@ -140,7 +140,7 @@ comparison uses A_z = -A, A_perp = B
 
 ## Colab
 
-`notebooks/train_in_colab.ipynb` contains the full Colab workflow and displays the required figures: raw CPMG traces, true spin scatter, ground-truth heatmap, train/validation loss, target-vs-predicted heatmap, and precision/recall/MAE.
+`notebooks/train_in_colab.ipynb` contains the full Colab workflow and displays the required figures: raw CPMG traces, true spin scatter, ground-truth heatmap, train/validation loss, target-vs-predicted heatmap, precision/recall/MAE, and an overlay of the original CPMG signals with signals regenerated from the identified C13s for `N=32` and `N=256`.
 
 Inside a cloned Colab repo, run:
 
