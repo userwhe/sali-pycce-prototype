@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,9 +25,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_project_root() -> Path:
+    candidates = []
+    if os.environ.get("SALI_PYCCE_PROJECT_ROOT"):
+        candidates.append(Path(os.environ["SALI_PYCCE_PROJECT_ROOT"]))
+    candidates.extend([Path.cwd(), Path("/content/sali-pycce-prototype"), Path("/content/project")])
+    for candidate in candidates:
+        root = candidate.expanduser().resolve()
+        if (root / "pyproject.toml").exists() and (root / "src" / "sali_pycce").exists():
+            return root
+    raise FileNotFoundError(
+        "Could not find the SALI-PyCCE project root. Run this script from the repository root, "
+        "or upload/extract the repository to /content/sali-pycce-prototype before using colab exec."
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     python = sys.executable
+    os.chdir(resolve_project_root())
     Path(args.checkpoint).parent.mkdir(parents=True, exist_ok=True)
     Path(args.history).parent.mkdir(parents=True, exist_ok=True)
     Path(args.metrics).parent.mkdir(parents=True, exist_ok=True)
