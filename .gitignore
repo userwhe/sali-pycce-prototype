@@ -10,3 +10,4 @@ data/*.npz
 *.pt
 *.pth
 .superpowers/
+.worktrees/
