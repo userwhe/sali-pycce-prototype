@@ -9,3 +9,4 @@ checkpoints/
 data/*.npz
 *.pt
 *.pth
+.superpowers/
