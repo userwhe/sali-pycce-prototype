@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
+from numbers import Integral
+
 import torch
 from torch import nn
+
+
+def _positive_int(name: str, value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer.")
+    return int(value)
 
 
 class SignalBranch(nn.Module):
@@ -47,14 +55,17 @@ class SALINet(nn.Module):
     ) -> None:
         super().__init__()
         height, width = output_shape
+        height = _positive_int("output_shape height", height)
+        width = _positive_int("output_shape width", width)
+        self.n_inputs = _positive_int("n_inputs", n_inputs)
+        pooled_len = _positive_int("pooled_len", pooled_len)
+        self.decoder_channels = _positive_int("decoder_channels", decoder_channels)
         if height % 8 != 0 or width % 8 != 0:
             raise ValueError("output_shape height and width must be divisible by 8.")
-        self.n_inputs = int(n_inputs)
-        self.output_shape = (int(height), int(width))
+        self.output_shape = (height, width)
         self.base_shape = (self.output_shape[0] // 8, self.output_shape[1] // 8)
-        self.decoder_channels = int(decoder_channels)
         self.branches = nn.ModuleList([SignalBranch(pooled_len=pooled_len) for _ in range(self.n_inputs)])
-        branch_dim = 16 * int(pooled_len)
+        branch_dim = 16 * pooled_len
         self.fc = nn.Sequential(
             nn.Linear(self.n_inputs * branch_dim, 512),
             nn.ReLU(inplace=True),

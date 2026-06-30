@@ -23,3 +23,28 @@ def test_model_forward_shape_research_grid():
 def test_model_rejects_output_shape_not_divisible_by_eight():
     with pytest.raises(ValueError, match="divisible by 8"):
         SALINet(output_shape=(130, 256))
+
+
+def test_model_rejects_zero_output_shape_height():
+    with pytest.raises(ValueError, match="positive"):
+        SALINet(output_shape=(0, 64))
+
+
+def test_model_rejects_negative_output_shape_height():
+    with pytest.raises(ValueError, match="positive"):
+        SALINet(output_shape=(-8, 64))
+
+
+def test_model_rejects_zero_n_inputs():
+    with pytest.raises(ValueError, match="positive"):
+        SALINet(n_inputs=0)
+
+
+def test_model_rejects_zero_pooled_len():
+    with pytest.raises(ValueError, match="positive"):
+        SALINet(pooled_len=0)
+
+
+def test_model_rejects_zero_decoder_channels():
+    with pytest.raises(ValueError, match="positive"):
+        SALINet(decoder_channels=0)
