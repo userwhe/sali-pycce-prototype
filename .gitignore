@@ -11,3 +11,4 @@ data/*.npz
 *.pth
 .superpowers/
 .worktrees/
+*.egg-info/
