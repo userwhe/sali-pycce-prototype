@@ -74,6 +74,10 @@ class TrainingConfig:
     early_stopping_patience: int = 20
     min_delta: float = 0.0
     device: str = "auto"
+    loss_type: str = "mse"
+    positive_weight: float = 25.0
+    border_penalty_weight: float = 0.0
+    border_width: int = 2
 
 
 @dataclass(slots=True)

@@ -8,12 +8,52 @@ import torch
 from torch import nn
 
 import sali.train as train_module
+from sali.config import TrainingConfig
 from sali.data import DataSplits, generate_splits
-from sali.train import choose_device, train_model
+from sali.train import choose_device, make_heatmap_loss, train_model
 
 
 def test_choose_device_accepts_cpu() -> None:
     assert str(choose_device("cpu")) == "cpu"
+
+
+def test_weighted_mse_loss_upweights_positive_target_pixels() -> None:
+    cfg = copy.deepcopy(default_training_config := TrainingConfig())
+    cfg.loss_type = "weighted_mse"
+    cfg.positive_weight = 9.0
+    criterion = make_heatmap_loss(cfg)
+
+    positive_target = torch.zeros((1, 1, 2, 2), dtype=torch.float32)
+    positive_target[0, 0, 0, 0] = 1.0
+    positive_prediction = torch.zeros_like(positive_target)
+    background_target = torch.zeros_like(positive_target)
+    background_prediction = torch.zeros_like(background_target)
+    background_prediction[0, 0, 1, 1] = 1.0
+
+    positive_loss = criterion(positive_prediction, positive_target)
+    background_loss = criterion(background_prediction, background_target)
+
+    assert positive_loss > background_loss * 5.0
+    assert default_training_config.loss_type == "mse"
+
+
+def test_border_penalty_adds_cost_for_border_predictions() -> None:
+    cfg = TrainingConfig(loss_type="mse", border_penalty_weight=2.0, border_width=1)
+    criterion = make_heatmap_loss(cfg)
+    target = torch.zeros((1, 1, 4, 4), dtype=torch.float32)
+    border_prediction = torch.zeros_like(target)
+    interior_prediction = torch.zeros_like(target)
+    border_prediction[0, 0, 0, 1] = 1.0
+    interior_prediction[0, 0, 2, 2] = 1.0
+
+    assert criterion(border_prediction, target) > criterion(interior_prediction, target)
+
+
+def test_make_heatmap_loss_rejects_unknown_loss_type() -> None:
+    cfg = TrainingConfig(loss_type="mystery")
+
+    with pytest.raises(ValueError, match="loss_type"):
+        make_heatmap_loss(cfg)
 
 
 def test_train_model_smoke(tiny_config, tmp_path) -> None:

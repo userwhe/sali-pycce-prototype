@@ -38,6 +38,7 @@ for candidate in (ROOT / "src", Path("/content/sali/src")):
 
 from sali.config import RunConfig, paper_config, practical_config
 from sali.data import DataSplits, generate_splits
+from sali.diagnostics import DEFAULT_THRESHOLDS, diagnose_splits, select_threshold
 from sali.metrics import aggregate_by_true_count
 from sali.physics import Couplings, generate_sample_signals
 from sali.plots import (
@@ -64,7 +65,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-samples", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--loss-type", choices=["mse", "weighted_mse", "weighted_bce"], default=None)
+    parser.add_argument("--positive-weight", type=float, default=None)
+    parser.add_argument("--border-penalty-weight", type=float, default=None)
+    parser.add_argument("--border-width", type=int, default=None)
+    parser.add_argument("--threshold-mode", choices=["fixed", "calibrate"], default="fixed")
+    parser.add_argument(
+        "--thresholds",
+        default=",".join(str(value) for value in DEFAULT_THRESHOLDS),
+        help="Comma-separated post-processing thresholds to sweep for diagnostics/calibration.",
+    )
+    parser.add_argument("--diagnostic-samples", type=int, default=64)
+    parser.add_argument("--disable-diagnostic-morphology", action="store_true")
     return parser.parse_args()
+
+
+def parse_thresholds(raw: str) -> list[float]:
+    thresholds = [float(item.strip()) for item in raw.split(",") if item.strip()]
+    if not thresholds:
+        raise ValueError("at least one threshold is required")
+    if any(value < 0.0 or value > 1.0 for value in thresholds):
+        raise ValueError("thresholds must be between 0 and 1")
+    return thresholds
 
 
 def config_from_args(args: argparse.Namespace) -> RunConfig:
@@ -81,6 +103,14 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         cfg.training.max_epochs = args.epochs
     if args.batch_size is not None:
         cfg.training.batch_size = args.batch_size
+    if args.loss_type is not None:
+        cfg.training.loss_type = args.loss_type
+    if args.positive_weight is not None:
+        cfg.training.positive_weight = args.positive_weight
+    if args.border_penalty_weight is not None:
+        cfg.training.border_penalty_weight = args.border_penalty_weight
+    if args.border_width is not None:
+        cfg.training.border_width = args.border_width
     cfg.training.device = args.device
     return cfg
 
@@ -137,6 +167,23 @@ def main() -> None:
 
     result = train_model(cfg, splits)
     plot_loss(result.history, cfg.output_dir / "figures" / "loss.png")
+
+    thresholds = parse_thresholds(args.thresholds)
+    diagnostics = diagnose_splits(
+        result.model,
+        splits,
+        cfg,
+        thresholds=thresholds,
+        max_samples=args.diagnostic_samples,
+        disable_morphology=args.disable_diagnostic_morphology,
+    )
+    save_json(cfg.output_dir / "diagnostics.json", diagnostics)
+    selected_threshold = {"mode": args.threshold_mode, "threshold": cfg.postprocess.threshold}
+    if args.threshold_mode == "calibrate":
+        selected = select_threshold(diagnostics["val"]["threshold_sweep"])
+        cfg.postprocess.threshold = float(selected["threshold"])
+        selected_threshold = {"mode": "calibrate", **selected}
+    save_json(cfg.output_dir / "selected_threshold.json", selected_threshold)
 
     metrics = evaluate_model(result.model, cfg, splits.test, max_samples=args.max_eval_samples)
     summary = aggregate_by_true_count(metrics)

@@ -20,6 +20,10 @@ def test_train_colab_help_runs() -> None:
 
     assert "--preset" in completed.stdout
     assert "--field" in completed.stdout
+    assert "--loss-type" in completed.stdout
+    assert "--positive-weight" in completed.stdout
+    assert "--border-penalty-weight" in completed.stdout
+    assert "--threshold-mode" in completed.stdout
 
 
 def test_train_colab_sets_writable_matplotlib_config(monkeypatch) -> None:

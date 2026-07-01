@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -23,6 +24,68 @@ class TrainResult:
     model: SaliNet
     history: dict[str, list[float]]
     best_checkpoint: Path
+
+
+class HeatmapLoss(nn.Module):
+    def __init__(
+        self,
+        loss_type: str,
+        positive_weight: float,
+        border_penalty_weight: float,
+        border_width: int,
+    ) -> None:
+        super().__init__()
+        self.loss_type = loss_type
+        self.positive_weight = positive_weight
+        self.border_penalty_weight = border_penalty_weight
+        self.border_width = border_width
+
+    def forward(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        if self.loss_type == "mse":
+            loss = torch.mean((prediction - target) ** 2)
+        elif self.loss_type == "weighted_mse":
+            weights = 1.0 + (self.positive_weight * target)
+            loss = torch.mean(weights * ((prediction - target) ** 2))
+        elif self.loss_type == "weighted_bce":
+            weights = 1.0 + (self.positive_weight * target)
+            clipped = torch.clamp(prediction, 1e-6, 1.0 - 1e-6)
+            loss = torch.mean(weights * F.binary_cross_entropy(clipped, target, reduction="none"))
+        else:
+            raise ValueError("loss_type must be one of: mse, weighted_mse, weighted_bce")
+        if self.border_penalty_weight > 0.0:
+            loss = loss + (self.border_penalty_weight * _border_penalty(prediction, self.border_width))
+        return loss
+
+
+def _border_penalty(prediction: torch.Tensor, border_width: int) -> torch.Tensor:
+    if border_width < 1:
+        raise ValueError("border_width must be at least 1 when border penalty is enabled")
+    height, width = prediction.shape[-2:]
+    if border_width * 2 >= min(height, width):
+        raise ValueError("border_width is too large for the heatmap dimensions")
+    border = torch.zeros_like(prediction, dtype=torch.bool)
+    border[..., :border_width, :] = True
+    border[..., -border_width:, :] = True
+    border[..., :, :border_width] = True
+    border[..., :, -border_width:] = True
+    return torch.mean(prediction[border] ** 2)
+
+
+def make_heatmap_loss(cfg) -> nn.Module:
+    if cfg.loss_type not in {"mse", "weighted_mse", "weighted_bce"}:
+        raise ValueError("loss_type must be one of: mse, weighted_mse, weighted_bce")
+    if not np.isfinite(cfg.positive_weight) or cfg.positive_weight < 0.0:
+        raise ValueError("positive_weight must be finite and non-negative")
+    if not np.isfinite(cfg.border_penalty_weight) or cfg.border_penalty_weight < 0.0:
+        raise ValueError("border_penalty_weight must be finite and non-negative")
+    if cfg.border_width < 1:
+        raise ValueError("border_width must be at least 1")
+    return HeatmapLoss(
+        loss_type=cfg.loss_type,
+        positive_weight=float(cfg.positive_weight),
+        border_penalty_weight=float(cfg.border_penalty_weight),
+        border_width=int(cfg.border_width),
+    )
 
 
 def choose_device(requested: str) -> torch.device:
@@ -129,7 +192,7 @@ def train_model(cfg: RunConfig, splits: DataSplits) -> TrainResult:
         batch_size=cfg.training.batch_size,
         shuffle=False,
     )
-    criterion = nn.MSELoss()
+    criterion = make_heatmap_loss(cfg.training)
     optimizer = Adam(model.parameters(), lr=cfg.training.learning_rate)
     scheduler = ReduceLROnPlateau(
         optimizer,
