@@ -47,6 +47,8 @@ def pixel_to_coupling(
     data: DataConfig,
     model: ModelConfig,
 ) -> tuple[float, float]:
+    row = float(np.clip(row, 2, model.output_height - 3))
+    col = float(np.clip(col, 2, model.output_width - 3))
     effective_h = model.output_height - 4
     effective_w = model.output_width - 4
     y = (row - 2.0) / float(effective_h - 1)
