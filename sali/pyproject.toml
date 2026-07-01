@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sali-reproduction"
+version = "0.1.0"
+description = "PyTorch reproduction of the SALI signal-to-image nuclear spin detection model."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "torch>=2.1",
+  "scipy>=1.10",
+  "scikit-image>=0.22",
+  "matplotlib>=3.7",
+  "pandas>=2.0",
+  "tqdm>=4.66",
+  "nbformat>=5.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
