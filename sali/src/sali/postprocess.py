@@ -4,9 +4,9 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy import ndimage as ndi
+from skimage import morphology
 from skimage.feature import peak_local_max
 from skimage.measure import label, regionprops
-from skimage.morphology import dilation, erosion, footprint_rectangle
 
 from sali.config import DataConfig, ModelConfig, PostprocessConfig
 from sali.targets import Box, pixel_to_coupling
@@ -43,22 +43,60 @@ def _region_max_intensity(region) -> float:
     return float(intensity_max)
 
 
+def _square_footprint(size: int) -> np.ndarray:
+    footprint_rectangle = getattr(morphology, "footprint_rectangle", None)
+    if footprint_rectangle is not None:
+        return footprint_rectangle((size, size))
+    return morphology.square(size)
+
+
+def _erode_mask(mask: np.ndarray, footprint: np.ndarray) -> np.ndarray:
+    erosion = getattr(morphology, "erosion", None)
+    if erosion is not None:
+        return erosion(mask, footprint)
+    return morphology.binary_erosion(mask, footprint)
+
+
+def _dilate_mask(mask: np.ndarray, footprint: np.ndarray) -> np.ndarray:
+    dilation = getattr(morphology, "dilation", None)
+    if dilation is not None:
+        return dilation(mask, footprint)
+    return morphology.binary_dilation(mask, footprint)
+
+
+def _validate_config(cfg: PostprocessConfig) -> None:
+    if not np.isfinite(cfg.threshold) or not 0.0 <= cfg.threshold <= 1.0:
+        raise ValueError("threshold must be finite and between 0 and 1")
+    if cfg.min_area < 1:
+        raise ValueError("min_area must be at least 1")
+    if cfg.local_max_min_distance_px < 1:
+        raise ValueError("local_max_min_distance_px must be at least 1")
+    if cfg.erosion_size < 0:
+        raise ValueError("erosion_size must be non-negative")
+    if cfg.dilation_size < 0:
+        raise ValueError("dilation_size must be non-negative")
+
+
 def postprocess_heatmap(
     heatmap: np.ndarray,
     data: DataConfig,
     model: ModelConfig,
     cfg: PostprocessConfig,
 ) -> list[Prediction]:
+    _validate_config(cfg)
     if heatmap.shape != (1, model.output_height, model.output_width):
         raise ValueError(f"heatmap must have shape (1, {model.output_height}, {model.output_width})")
     image = np.asarray(heatmap[0], dtype=np.float32)
     if not np.isfinite(image).all():
         raise FloatingPointError("heatmap contains non-finite values")
-    mask = image >= cfg.threshold
+    threshold_mask = image >= cfg.threshold
+    mask = threshold_mask
     if cfg.erosion_size > 0:
-        mask = erosion(mask, footprint_rectangle((2 * cfg.erosion_size + 1, 2 * cfg.erosion_size + 1)))
+        mask = _erode_mask(mask, _square_footprint(2 * cfg.erosion_size + 1))
     if cfg.dilation_size > 0:
-        mask = dilation(mask, footprint_rectangle((2 * cfg.dilation_size + 1, 2 * cfg.dilation_size + 1)))
+        mask = _dilate_mask(mask, _square_footprint(2 * cfg.dilation_size + 1))
+    if threshold_mask.any() and not mask.any():
+        mask = threshold_mask
     labels = label(mask, connectivity=2)
     predictions: list[Prediction] = []
     for region in regionprops(labels, intensity_image=image):
