@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,19 +63,63 @@ def _save_history(path: Path, history: dict[str, list[float]]) -> None:
     path.write_text(json.dumps(history, indent=2), encoding="utf-8")
 
 
+def _set_torch_seed(seed: int) -> None:
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _seeded_generator(seed: int) -> torch.Generator:
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    return generator
+
+
+def _cpu_state_dict(model: nn.Module) -> dict[str, torch.Tensor]:
+    return {name: tensor.detach().cpu().clone() for name, tensor in model.state_dict().items()}
+
+
+def _load_state_dict_to_device(
+    model: nn.Module,
+    state: dict[str, torch.Tensor],
+    device: torch.device,
+) -> None:
+    model.load_state_dict({name: tensor.to(device) for name, tensor in state.items()})
+
+
 def _drops_singleton_final_batch(sample_count: int, batch_size: int) -> bool:
     return sample_count > batch_size and sample_count % batch_size == 1
 
 
+def _effective_train_batch_count(sample_count: int, batch_size: int, drop_last: bool) -> int:
+    if drop_last:
+        return sample_count // batch_size
+    return (sample_count + batch_size - 1) // batch_size
+
+
+def _validate_training_batches(sample_count: int, batch_size: int) -> bool:
+    if batch_size < 2:
+        raise ValueError("training batch_size must be at least 2 for BatchNorm")
+    if sample_count < 2:
+        raise ValueError("training split must contain at least 2 samples for BatchNorm")
+    drop_last = _drops_singleton_final_batch(sample_count, batch_size)
+    if _effective_train_batch_count(sample_count, batch_size, drop_last) <= 0:
+        raise ValueError("effective training batch count must be greater than 0")
+    return drop_last
+
+
 def train_model(cfg: RunConfig, splits: DataSplits) -> TrainResult:
+    drop_last = _validate_training_batches(len(splits.train), cfg.training.batch_size)
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     device = choose_device(cfg.training.device)
+    _set_torch_seed(cfg.data.seed)
     model = SaliNet(cfg.model).to(device)
     train_loader = DataLoader(
         SaliDataset(splits.train),
         batch_size=cfg.training.batch_size,
         shuffle=True,
-        drop_last=_drops_singleton_final_batch(len(splits.train), cfg.training.batch_size),
+        drop_last=drop_last,
+        generator=_seeded_generator(cfg.data.seed),
     )
     val_loader = DataLoader(
         SaliDataset(splits.val),
@@ -94,7 +137,8 @@ def train_model(cfg: RunConfig, splits: DataSplits) -> TrainResult:
     )
     history: dict[str, list[float]] = {"train_loss": [], "val_loss": [], "lr": []}
     best_loss = float("inf")
-    best_state = copy.deepcopy(model.state_dict())
+    early_stopping_loss = float("inf")
+    best_state = _cpu_state_dict(model)
     best_checkpoint = cfg.output_dir / "best_model.pt"
     stale_epochs = 0
     for _epoch in range(cfg.training.max_epochs):
@@ -105,16 +149,18 @@ def train_model(cfg: RunConfig, splits: DataSplits) -> TrainResult:
         history["train_loss"].append(float(train_loss))
         history["val_loss"].append(float(val_loss))
         history["lr"].append(lr)
-        if val_loss < best_loss - cfg.training.min_delta:
+        if val_loss < best_loss:
             best_loss = float(val_loss)
-            best_state = copy.deepcopy(model.state_dict())
+            best_state = _cpu_state_dict(model)
             torch.save(best_state, best_checkpoint)
+        if val_loss < early_stopping_loss - cfg.training.min_delta:
+            early_stopping_loss = float(val_loss)
             stale_epochs = 0
         else:
             stale_epochs += 1
         if stale_epochs >= cfg.training.early_stopping_patience:
             break
-    model.load_state_dict(best_state)
+    _load_state_dict_to_device(model, best_state, device)
     if not best_checkpoint.exists():
         torch.save(best_state, best_checkpoint)
     _save_history(cfg.output_dir / "history.json", history)
