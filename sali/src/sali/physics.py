@@ -7,16 +7,27 @@ import numpy as np
 from sali.config import PhysicsConfig
 
 
+_PROBABILITY_TOLERANCE = 1e-6
+
+
 @dataclass(frozen=True, slots=True)
 class Couplings:
     az_khz: np.ndarray
     aperp_khz: np.ndarray
 
     def __post_init__(self) -> None:
-        if self.az_khz.shape != self.aperp_khz.shape:
+        az_khz = np.array(self.az_khz, dtype=np.float32, copy=True)
+        aperp_khz = np.array(self.aperp_khz, dtype=np.float32, copy=True)
+        if az_khz.shape != aperp_khz.shape:
             raise ValueError("az_khz and aperp_khz must have matching shapes")
-        if self.az_khz.ndim != 1:
+        if az_khz.ndim != 1:
             raise ValueError("coupling arrays must be one-dimensional")
+        if not np.isfinite(az_khz).all() or not np.isfinite(aperp_khz).all():
+            raise ValueError("coupling arrays must contain finite values")
+        az_khz.setflags(write=False)
+        aperp_khz.setflags(write=False)
+        object.__setattr__(self, "az_khz", az_khz)
+        object.__setattr__(self, "aperp_khz", aperp_khz)
 
     @property
     def count(self) -> int:
@@ -31,6 +42,18 @@ def tau_grid_us(start_us: float, stop_us: float, points: int) -> np.ndarray:
     return np.linspace(start_us, stop_us, points, dtype=np.float32)
 
 
+def _validate_probability_signal(signal: np.ndarray, name: str) -> np.ndarray:
+    values = np.asarray(signal, dtype=np.float32)
+    if not np.isfinite(values).all():
+        raise FloatingPointError(f"{name} contains non-finite values")
+    if values.size > 0:
+        min_value = float(np.min(values))
+        max_value = float(np.max(values))
+        if min_value < -_PROBABILITY_TOLERANCE or max_value > 1.0 + _PROBABILITY_TOLERANCE:
+            raise FloatingPointError(f"{name} contains probability values outside [0, 1]")
+    return np.clip(values, 0.0, 1.0).astype(np.float32)
+
+
 def _ideal_signal(nuclei: Couplings, tau_us: np.ndarray, n_pulses: int, cfg: PhysicsConfig) -> np.ndarray:
     if nuclei.count == 0:
         return np.ones_like(tau_us, dtype=np.float32)
@@ -41,8 +64,9 @@ def _ideal_signal(nuclei: Couplings, tau_us: np.ndarray, n_pulses: int, cfg: Phy
     aperp = nuclei.aperp_khz.astype(np.float64) * 2.0 * np.pi * 1e3
     shifted = az + omega_l
     omega_tilde = np.sqrt(shifted[:, None] ** 2 + aperp[:, None] ** 2)
-    mz = shifted[:, None] / omega_tilde
-    mx = aperp[:, None] / omega_tilde
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mz = shifted[:, None] / omega_tilde
+        mx = aperp[:, None] / omega_tilde
     alpha = omega_tilde * tau_s[None, :]
     beta = omega_l * tau_s[None, :]
     cos_alpha = np.cos(alpha)
@@ -52,29 +76,29 @@ def _ideal_signal(nuclei: Couplings, tau_us: np.ndarray, n_pulses: int, cfg: Phy
     cos_phi = cos_alpha * cos_beta - mz * sin_alpha * sin_beta
     cos_phi = np.clip(cos_phi, -1.0, 1.0)
     phi = np.arccos(cos_phi)
-    denom = 1.0 + cos_alpha * cos_beta - mz * sin_alpha * sin_beta
-    denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12 + 1e-12, denom)
+    denom = np.maximum(1.0 + cos_phi, 1e-12)
     modulation = ((1.0 - cos_alpha) * (1.0 - cos_beta)) / denom
     sin_term = np.sin(n_pulses * phi / 2.0) ** 2
     mj = 1.0 - (mx**2) * modulation * sin_term
     product = np.prod(mj, axis=0)
     px = 0.5 * (1.0 + product)
-    return np.clip(px, 0.0, 1.0).astype(np.float32)
+    return _validate_probability_signal(px, "ideal signal")
 
 
 def _apply_decoherence(signal: np.ndarray, tau_us: np.ndarray, cfg: PhysicsConfig) -> np.ndarray:
     if not cfg.add_decoherence:
         return signal
     decay = np.exp(-tau_us.astype(np.float32) / np.float32(cfg.t2_us))
-    return np.clip(signal * decay, 0.0, 1.0).astype(np.float32)
+    return _validate_probability_signal(signal * decay, "decohered signal")
 
 
 def _apply_shot_noise(signal: np.ndarray, cfg: PhysicsConfig, rng: np.random.Generator) -> np.ndarray:
+    signal = _validate_probability_signal(signal, "shot-noise input signal")
     if not cfg.add_shot_noise:
         return signal.astype(np.float32)
-    counts = rng.binomial(cfg.measurements, np.clip(signal, 0.0, 1.0))
+    counts = rng.binomial(cfg.measurements, signal)
     noisy = counts.astype(np.float32) / np.float32(cfg.measurements)
-    return np.clip(noisy, 0.0, 1.0).astype(np.float32)
+    return _validate_probability_signal(noisy, "shot-noise signal")
 
 
 def simulate_cpmg_signal(
