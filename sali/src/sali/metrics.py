@@ -3,11 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from sali.config import DataConfig, ModelConfig, PhysicsConfig
 from sali.physics import Couplings, generate_sample_signals
 from sali.postprocess import Prediction
 from sali.targets import Box, true_boxes
+
+
+_PROBABILITY_TOLERANCE = 1e-6
+_MATCH_CARDINALITY_WEIGHT = 1_000_000.0
+_CONFIDENCE_TIE_BREAK_WEIGHT = 1e-9
 
 
 @dataclass(slots=True)
@@ -49,33 +55,51 @@ def box_iou(a: Box, b: Box) -> float:
 
 def _match_predictions(predictions: list[Prediction], true: Couplings, data: DataConfig, model: ModelConfig) -> list[tuple[int, int]]:
     boxes = true_boxes(true, data, model)
-    matches: list[tuple[int, int]] = []
-    used_true: set[int] = set()
+    if not predictions or not boxes:
+        return []
+    scores = np.zeros((len(predictions), len(boxes)), dtype=np.float64)
     for pred_idx, pred in enumerate(predictions):
-        best_idx = -1
-        best_iou = 0.0
         for true_idx, box in enumerate(boxes):
-            if true_idx in used_true:
-                continue
             iou = box_iou(pred.box, box)
-            if iou > best_iou:
-                best_iou = iou
-                best_idx = true_idx
-        if best_idx >= 0 and best_iou > 0.0:
-            matches.append((pred_idx, best_idx))
-            used_true.add(best_idx)
-    return matches
+            if iou > 0.0:
+                scores[pred_idx, true_idx] = (
+                    _MATCH_CARDINALITY_WEIGHT
+                    + iou
+                    + (_CONFIDENCE_TIE_BREAK_WEIGHT * pred.confidence)
+                )
+    pred_indices, true_indices = linear_sum_assignment(scores, maximize=True)
+    return [
+        (int(pred_idx), int(true_idx))
+        for pred_idx, true_idx in zip(pred_indices, true_indices, strict=True)
+        if scores[pred_idx, true_idx] > 0.0
+    ]
+
+
+def _validate_raw_signals(raw_signals: np.ndarray, physics: PhysicsConfig) -> np.ndarray:
+    signals = np.asarray(raw_signals, dtype=np.float32)
+    expected_shape = (2, physics.signal_points)
+    if signals.shape != expected_shape:
+        raise ValueError(f"raw_signals must have shape {expected_shape}")
+    if not np.isfinite(signals).all():
+        raise FloatingPointError("raw_signals contains non-finite values")
+    if signals.size > 0:
+        min_value = float(np.min(signals))
+        max_value = float(np.max(signals))
+        if min_value < -_PROBABILITY_TOLERANCE or max_value > 1.0 + _PROBABILITY_TOLERANCE:
+            raise FloatingPointError("raw_signals contains probability values outside [0, 1]")
+    return np.clip(signals, 0.0, 1.0).astype(np.float32)
 
 
 def evaluate_sample(
     predictions: list[Prediction],
     true: Couplings,
-    original_signals: np.ndarray,
+    raw_signals: np.ndarray,
     data: DataConfig,
     model: ModelConfig,
     physics: PhysicsConfig,
     rng: np.random.Generator,
 ) -> SampleMetrics:
+    raw_signals = _validate_raw_signals(raw_signals, physics)
     matches = _match_predictions(predictions, true, data, model)
     tp = len(matches)
     fp = len(predictions) - tp
@@ -120,9 +144,17 @@ def evaluate_sample(
         false_negatives=fn,
         mae_az_khz=mae_az,
         mae_aperp_khz=mae_aperp,
-        signal_mae_32=float(np.mean(np.abs(reconstructed[0] - original_signals[0]))),
-        signal_mae_256=float(np.mean(np.abs(reconstructed[1] - original_signals[1]))),
+        signal_mae_32=float(np.mean(np.abs(reconstructed[0] - raw_signals[0]))),
+        signal_mae_256=float(np.mean(np.abs(reconstructed[1] - raw_signals[1]))),
     )
+
+
+def _finite_mean(values: list[float]) -> float:
+    array = np.asarray(values, dtype=np.float64)
+    finite = array[np.isfinite(array)]
+    if finite.size == 0:
+        return float("nan")
+    return float(np.mean(finite))
 
 
 def aggregate_by_true_count(results: list[SampleMetrics]) -> dict[int, dict[str, float]]:
@@ -134,8 +166,8 @@ def aggregate_by_true_count(results: list[SampleMetrics]) -> dict[int, dict[str,
         summary[count] = {
             "precision": float(np.mean([item.precision for item in items])),
             "recall": float(np.mean([item.recall for item in items])),
-            "mae_az_khz": float(np.nanmean([item.mae_az_khz for item in items])),
-            "mae_aperp_khz": float(np.nanmean([item.mae_aperp_khz for item in items])),
+            "mae_az_khz": _finite_mean([item.mae_az_khz for item in items]),
+            "mae_aperp_khz": _finite_mean([item.mae_aperp_khz for item in items]),
             "signal_mae_32": float(np.mean([item.signal_mae_32 for item in items])),
             "signal_mae_256": float(np.mean([item.signal_mae_256 for item in items])),
         }
