@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch import nn
 from torch.optim import Adam
@@ -11,8 +12,10 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
 from sali.config import RunConfig
-from sali.data import DataSplits, SaliDataset
+from sali.data import DataSplits, SaliDataset, Sample
+from sali.metrics import SampleMetrics, evaluate_sample
 from sali.model import SaliNet
+from sali.postprocess import postprocess_heatmap
 
 
 @dataclass(slots=True)
@@ -165,3 +168,35 @@ def train_model(cfg: RunConfig, splits: DataSplits) -> TrainResult:
         torch.save(best_state, best_checkpoint)
     _save_history(cfg.output_dir / "history.json", history)
     return TrainResult(model=model, history=history, best_checkpoint=best_checkpoint)
+
+
+def evaluate_model(
+    model: SaliNet,
+    cfg: RunConfig,
+    samples: list[Sample],
+    max_samples: int | None = None,
+) -> list[SampleMetrics]:
+    device = choose_device(cfg.training.device)
+    model.to(device)
+    model.eval()
+    rng = np.random.default_rng(cfg.data.seed + 999)
+    selected = samples if max_samples is None else samples[:max_samples]
+    results: list[SampleMetrics] = []
+    for sample in selected:
+        signal32 = torch.from_numpy(sample.signals[0:1]).unsqueeze(0).to(device)
+        signal256 = torch.from_numpy(sample.signals[1:2]).unsqueeze(0).to(device)
+        with torch.no_grad():
+            prediction = model(signal32, signal256).cpu().numpy()[0]
+        predicted_nuclei = postprocess_heatmap(prediction, cfg.data, cfg.model, cfg.postprocess)
+        results.append(
+            evaluate_sample(
+                predicted_nuclei,
+                sample.nuclei,
+                sample.raw_signals,
+                cfg.data,
+                cfg.model,
+                cfg.physics,
+                rng,
+            )
+        )
+    return results
