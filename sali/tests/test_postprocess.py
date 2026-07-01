@@ -107,6 +107,30 @@ def test_postprocess_preserves_one_pixel_detection_with_min_area_one() -> None:
     assert predictions[0].col == 50.0
 
 
+def test_postprocess_preserves_one_pixel_detection_next_to_surviving_blob() -> None:
+    data = DataConfig(train_samples=1, val_samples=1, test_samples=1)
+    model = ModelConfig()
+    pp = PostprocessConfig(threshold=0.5, min_area=1, erosion_size=1, dilation_size=1)
+    heatmap = np.zeros((1, model.output_height, model.output_width), dtype=np.float32)
+    heatmap[0, 39:42, 39:42] = np.array(
+        [
+            [0.6, 0.7, 0.6],
+            [0.7, 1.0, 0.7],
+            [0.6, 0.7, 0.6],
+        ],
+        dtype=np.float32,
+    )
+    heatmap[0, 100, 80] = 0.9
+
+    predictions = postprocess_heatmap(heatmap, data, model, pp)
+
+    assert len(predictions) == 2
+    assert {(round(prediction.row), round(prediction.col)) for prediction in predictions} == {
+        (40, 40),
+        (100, 80),
+    }
+
+
 def test_postprocess_splits_connected_region_with_two_separated_peaks() -> None:
     data = DataConfig(train_samples=1, val_samples=1, test_samples=1)
     model = ModelConfig()
