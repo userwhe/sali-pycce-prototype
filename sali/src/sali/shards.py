@@ -9,10 +9,11 @@ from typing import Iterator
 
 import numpy as np
 import torch
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, get_worker_info
 
 from sali.config import RunConfig
 from sali.data import NormalizationStats, Sample, _split_count, estimate_normalization_stats, generate_indexed_sample
+from sali.physics import Couplings
 
 
 SCHEMA_VERSION = 1
@@ -278,6 +279,34 @@ def load_shard_manifest(dataset_dir: Path, cfg: RunConfig | None = None) -> Shar
     return manifest
 
 
+def _load_shard_arrays(path: Path) -> dict[str, np.ndarray]:
+    with np.load(path) as arrays:
+        return {
+            "signals": np.asarray(arrays["signals"], dtype=np.float32),
+            "raw_signals": np.asarray(arrays["raw_signals"], dtype=np.float32),
+            "heatmaps": np.asarray(arrays["heatmaps"], dtype=np.float32),
+            "nuclei_count": np.asarray(arrays["nuclei_count"], dtype=np.uint8),
+            "nuclei_az_khz": np.asarray(arrays["nuclei_az_khz"], dtype=np.float32),
+            "nuclei_aperp_khz": np.asarray(arrays["nuclei_aperp_khz"], dtype=np.float32),
+            "indices": np.asarray(arrays["indices"], dtype=np.int64),
+        }
+
+
+def _sample_from_arrays(arrays: dict[str, np.ndarray], row: int, split: str) -> Sample:
+    count = int(arrays["nuclei_count"][row])
+    nuclei = Couplings(
+        az_khz=np.asarray(arrays["nuclei_az_khz"][row, :count], dtype=np.float32),
+        aperp_khz=np.asarray(arrays["nuclei_aperp_khz"][row, :count], dtype=np.float32),
+    )
+    return Sample(
+        signals=np.asarray(arrays["signals"][row], dtype=np.float32),
+        raw_signals=np.asarray(arrays["raw_signals"][row], dtype=np.float32),
+        heatmap=np.asarray(arrays["heatmaps"][row], dtype=np.float32),
+        nuclei=nuclei,
+        split=split,
+    )
+
+
 def iter_sharded_samples(
     cfg: RunConfig,
     dataset_dir: Path,
@@ -285,7 +314,17 @@ def iter_sharded_samples(
     *,
     max_samples: int | None = None,
 ) -> Iterator[Sample]:
-    raise NotImplementedError("sharded sample reconstruction is implemented in the next task")
+    manifest = load_shard_manifest(dataset_dir, cfg)
+    emitted = 0
+    for shard in manifest.shards:
+        if shard.split != split:
+            continue
+        arrays = _load_shard_arrays(dataset_dir / shard.path)
+        for row in range(shard.count):
+            if max_samples is not None and emitted >= max_samples:
+                return
+            yield _sample_from_arrays(arrays, row, split)
+            emitted += 1
 
 
 def materialize_sharded_samples(
@@ -295,7 +334,9 @@ def materialize_sharded_samples(
     *,
     max_samples: int,
 ) -> list[Sample]:
-    raise NotImplementedError("sharded sample reconstruction is implemented in the next task")
+    if max_samples <= 0:
+        raise ValueError("max_samples must be positive")
+    return list(iter_sharded_samples(cfg, dataset_dir, split, max_samples=max_samples))
 
 
 class ShardedSaliDataset(IterableDataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
@@ -308,4 +349,48 @@ class ShardedSaliDataset(IterableDataset[tuple[torch.Tensor, torch.Tensor, torch
         epoch: int = 0,
         shuffle: bool = False,
     ) -> None:
-        raise NotImplementedError("sharded dataset iteration is implemented in the next task")
+        self.cfg = cfg
+        self.dataset_dir = dataset_dir
+        self.split = split
+        self.epoch = int(epoch)
+        self.shuffle = bool(shuffle)
+        self.manifest = load_shard_manifest(dataset_dir, cfg)
+        self.shards = [shard for shard in self.manifest.shards if shard.split == split]
+        if not self.shards:
+            raise ValueError(f"manifest contains no shards for split {split}")
+        self.count = sum(shard.count for shard in self.shards)
+
+    def __len__(self) -> int:
+        return self.count
+
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        worker = get_worker_info()
+        worker_id = 0 if worker is None else worker.id
+        worker_count = 1 if worker is None else worker.num_workers
+        split_ids = {"train": 0, "val": 1, "test": 2}
+        seed = int(
+            np.random.SeedSequence(
+                [self.cfg.data.seed, split_ids[self.split], self.epoch]
+            ).generate_state(1)[0]
+        )
+        rng = np.random.default_rng(seed)
+        shard_order = np.arange(len(self.shards))
+        if self.shuffle:
+            rng.shuffle(shard_order)
+        position = 0
+        for shard_pos in shard_order:
+            shard = self.shards[int(shard_pos)]
+            arrays = _load_shard_arrays(self.dataset_dir / shard.path)
+            row_order = np.arange(shard.count)
+            if self.shuffle:
+                rng.shuffle(row_order)
+            for row in row_order:
+                if position % worker_count == worker_id:
+                    signals = arrays["signals"][int(row)]
+                    heatmap = arrays["heatmaps"][int(row)]
+                    yield (
+                        torch.from_numpy(signals[0:1]),
+                        torch.from_numpy(signals[1:2]),
+                        torch.from_numpy(heatmap),
+                    )
+                position += 1
