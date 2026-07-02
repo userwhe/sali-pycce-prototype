@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import csv
 import json
 
 import pytest
@@ -9,8 +10,8 @@ from torch import nn
 
 import sali.train as train_module
 from sali.config import TrainingConfig
-from sali.data import DataSplits, generate_splits
-from sali.train import choose_device, make_heatmap_loss, train_model
+from sali.data import DataSplits, estimate_normalization_stats, generate_splits
+from sali.train import choose_device, make_heatmap_loss, train_model, train_streamed_model
 
 
 def test_choose_device_accepts_cpu() -> None:
@@ -163,3 +164,139 @@ def test_train_model_is_reproducible_for_same_seed(tiny_config, tmp_path) -> Non
     second = train_model(second_cfg, second_splits)
 
     assert first.history == second.history
+
+
+def test_train_streamed_model_writes_resume_checkpoints_and_csv(tiny_config, tmp_path) -> None:
+    tiny_config.output_dir = tmp_path / "streamed-run"
+    tiny_config.training.batch_size = 2
+    tiny_config.training.max_epochs = 1
+    stats = estimate_normalization_stats(tiny_config, sample_limit=4)
+
+    result = train_streamed_model(tiny_config, stats, checkpoint_every_epochs=1)
+
+    latest = tiny_config.output_dir / "checkpoints" / "latest.pt"
+    epoch_checkpoint = tiny_config.output_dir / "checkpoints" / "epoch_0001.pt"
+    history_json = tiny_config.output_dir / "history.json"
+    history_csv = tiny_config.output_dir / "history.csv"
+    checkpoint = torch.load(latest, map_location="cpu", weights_only=False)
+    best_state = torch.load(result.best_checkpoint, map_location="cpu", weights_only=True)
+
+    assert latest.exists()
+    assert epoch_checkpoint.exists()
+    assert result.best_checkpoint.exists()
+    assert history_json.exists()
+    assert history_csv.exists()
+    assert checkpoint["epoch"] == 1
+    assert checkpoint["normalization_stats"]["mean"] == pytest.approx(stats.mean)
+    assert len(result.history["train_loss"]) == 1
+    assert all(tensor.device.type == "cpu" for tensor in best_state.values())
+    with history_csv.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["epoch"] == "1"
+    assert float(rows[0]["train_loss"]) == pytest.approx(result.history["train_loss"][0])
+
+
+def test_train_streamed_model_resume_continues_next_epoch(tiny_config, tmp_path) -> None:
+    tiny_config.output_dir = tmp_path / "streamed-resume"
+    tiny_config.training.batch_size = 2
+    tiny_config.training.max_epochs = 1
+    stats = estimate_normalization_stats(tiny_config, sample_limit=4)
+
+    train_streamed_model(tiny_config, stats, checkpoint_every_epochs=1)
+
+    resume_cfg = copy.deepcopy(tiny_config)
+    resume_cfg.training.max_epochs = 2
+    latest = resume_cfg.output_dir / "checkpoints" / "latest.pt"
+    result = train_streamed_model(
+        resume_cfg,
+        stats,
+        checkpoint_every_epochs=1,
+        resume_from=latest,
+    )
+    checkpoint = torch.load(latest, map_location="cpu", weights_only=False)
+
+    assert checkpoint["epoch"] == 2
+    assert len(result.history["train_loss"]) == 2
+    assert len(result.history["val_loss"]) == 2
+
+
+def test_train_sharded_model_writes_resume_checkpoints_and_csv(tiny_config, tmp_path) -> None:
+    from sali.shards import generate_shards
+    from sali.train import train_sharded_model
+
+    dataset_dir = tmp_path / "dataset"
+    run_dir = tmp_path / "sharded-run"
+    generate_shards(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+    tiny_config.output_dir = run_dir
+    tiny_config.training.batch_size = 2
+    tiny_config.training.max_epochs = 1
+
+    result = train_sharded_model(tiny_config, dataset_dir, checkpoint_every_epochs=1)
+
+    latest = run_dir / "checkpoints" / "latest.pt"
+    epoch_checkpoint = run_dir / "checkpoints" / "epoch_0001.pt"
+    history_json = run_dir / "history.json"
+    history_csv = run_dir / "history.csv"
+    checkpoint = torch.load(latest, map_location="cpu", weights_only=False)
+    best_state = torch.load(result.best_checkpoint, map_location="cpu", weights_only=True)
+
+    assert latest.exists()
+    assert epoch_checkpoint.exists()
+    assert result.best_checkpoint.exists()
+    assert history_json.exists()
+    assert history_csv.exists()
+    assert checkpoint["epoch"] == 1
+    assert checkpoint["normalization_stats"]["epsilon"] == pytest.approx(tiny_config.data.norm_epsilon)
+    assert len(result.history["train_loss"]) == 1
+    assert all(tensor.device.type == "cpu" for tensor in best_state.values())
+
+
+def test_train_sharded_model_resume_continues_next_epoch(tiny_config, tmp_path) -> None:
+    from sali.shards import generate_shards
+    from sali.train import train_sharded_model
+
+    dataset_dir = tmp_path / "dataset"
+    run_dir = tmp_path / "sharded-resume"
+    generate_shards(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+    tiny_config.output_dir = run_dir
+    tiny_config.training.batch_size = 2
+    tiny_config.training.max_epochs = 1
+
+    train_sharded_model(tiny_config, dataset_dir, checkpoint_every_epochs=1)
+
+    resume_cfg = copy.deepcopy(tiny_config)
+    resume_cfg.training.max_epochs = 2
+    latest = run_dir / "checkpoints" / "latest.pt"
+    result = train_sharded_model(
+        resume_cfg,
+        dataset_dir,
+        checkpoint_every_epochs=1,
+        resume_from=latest,
+    )
+    checkpoint = torch.load(latest, map_location="cpu", weights_only=False)
+
+    assert checkpoint["epoch"] == 2
+    assert len(result.history["train_loss"]) == 2
+    assert len(result.history["val_loss"]) == 2
+
+
+def test_train_sharded_model_does_not_generate_samples_or_heatmaps(tiny_config, tmp_path, monkeypatch) -> None:
+    from sali.shards import generate_shards
+    from sali.train import train_sharded_model
+
+    dataset_dir = tmp_path / "dataset"
+    generate_shards(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+    tiny_config.output_dir = tmp_path / "sharded-no-generation"
+    tiny_config.training.batch_size = 2
+    tiny_config.training.max_epochs = 1
+
+    def fail_generate(*_args, **_kwargs):
+        raise AssertionError("training must not generate samples")
+
+    def fail_heatmap(*_args, **_kwargs):
+        raise AssertionError("training must not render heatmaps")
+
+    monkeypatch.setattr("sali.data.generate_indexed_sample", fail_generate)
+    monkeypatch.setattr("sali.targets.render_heatmap", fail_heatmap)
+
+    train_sharded_model(tiny_config, dataset_dir, checkpoint_every_epochs=1)
