@@ -44,17 +44,17 @@ Each shard stores a contiguous range of deterministic sample indices for one spl
 - `nuclei_aperp_khz`: padded nucleus Aperp values, shape `(N, max_nuclei)`
 - `indices`: absolute split-local sample indices, shape `(N,)`
 
-Default dtypes:
+Default paper-faithful dtypes:
 
-- `signals`: `float16`
-- `raw_signals`: `float16`
-- `heatmaps`: `float16`
+- `signals`: `float32`
+- `raw_signals`: `float32`
+- `heatmaps`: `float32`
 - `nuclei_count`: `uint8`
 - `nuclei_az_khz`: `float32`
 - `nuclei_aperp_khz`: `float32`
 - `indices`: `int64`
 
-Training will cast `signals` and `heatmaps` to `float32` tensors before model and loss computation. This preserves the current loss implementation while reducing shard storage and I/O.
+Training will load `signals` and `heatmaps` as `float32` tensors before model and loss computation. Optional `float16` storage may be exposed for later speed/storage experiments, but it is not the default because the first sharded benchmark should keep the current paper-reproduction targets and loss numerics unchanged.
 
 ## Manifest
 
@@ -124,7 +124,7 @@ Per-epoch shuffling will shuffle shard order and sample order within shards usin
 During model training, the hot path should only:
 
 - load compressed arrays from shard files
-- cast signal and heatmap arrays to torch tensors
+- convert signal and heatmap arrays to torch tensors without changing target semantics
 - move tensors to the selected device
 - run forward/backward/loss
 
@@ -147,8 +147,8 @@ Diagnostic and plotting helpers may reconstruct `Sample` objects from shard cont
 - `--dataset-dir PATH`
 - `--shard-size N`
 - `--generate-shards`
-- `--shard-dtype float16|float32`
-- `--raw-signal-dtype float16|float32`
+- `--shard-dtype float32|float16`
+- `--raw-signal-dtype float32|float16`
 - `--cache-dataset-dir PATH`
 - `--skip-existing-shards`
 
@@ -169,15 +169,33 @@ Example Colab paths:
 
 ## Expected Storage
 
-For the full `3.6M` sample paper split:
+For the full `3.6M` sample paper split with paper-faithful `float32` shard storage:
 
-- heatmaps as `float16`: roughly `153 GB` before compression
-- raw signals as `float16`: roughly `14.4 GB`
-- normalized signals as `float16`: roughly `14.4 GB`
-- raw plus normalized signals as `float16`: roughly `28.8 GB`
+- heatmaps as `float32`: roughly `306 GB` before compression
+- raw signals as `float32`: roughly `28.8 GB`
+- normalized signals as `float32`: roughly `28.8 GB`
+- raw plus normalized signals as `float32`: roughly `57.6 GB`
 - nuclei metadata: comparatively small
 
-Because dense heatmaps are mostly zeros, compressed `.npz` shards should reduce storage substantially. If storing both `signals` and `raw_signals` proves too large, the first reduction is to store `raw_signals` only for validation/test or for a bounded diagnostics subset. The default first revision will store both so existing diagnostics remain straightforward and comparable.
+Because dense heatmaps are mostly zeros, compressed `.npz` shards should reduce storage substantially. If storing both `signals` and `raw_signals` proves too large, the first reduction is to store `raw_signals` only for validation/test or for a bounded diagnostics subset. If target storage remains the bottleneck after benchmarking, a later experiment can explicitly set `--shard-dtype float16`; that should be reported as a storage-optimized run rather than the primary paper-faithful run.
+
+## Paper-Faithfulness Check
+
+The sharded pipeline is an execution optimization, not a modeling change. It preserves the main-paper requirements:
+
+- separate high-field and low-field datasets, each using the configured magnetic field
+- `3.6M` samples at paper scale, split as `2.52M` train, `540k` validation, and `540k` test, matching a `70% / 15% / 15%` split
+- random nuclei count from `1` to `20`
+- `A^z` sampled from `[-100, 100] kHz`
+- positive `A^\perp` sampled from `[2, 102] kHz`
+- two input signals for `N=32` and `N=256` CPMG pulse counts
+- `1000` signal points for each input
+- `T2 = 200 us` decoherence and `1000` simulated measurements for shot noise through the existing physics generator
+- dense output heatmaps with one Gaussian-like `5 x 5` region per nucleus
+- mean squared error over all output pixels as the primary loss
+- post-training erosion, dilation, thresholding, connected components, area filtering, IoU matching, precision/recall, coupling MAE, and signal-reconstruction MAE through the existing diagnostics/evaluation code
+
+The pipeline must not change the sampled distributions, heatmap renderer, model output contract, or postprocessing/evaluation semantics. It only changes when the deterministic samples and heatmaps are computed.
 
 ## Error Handling
 
