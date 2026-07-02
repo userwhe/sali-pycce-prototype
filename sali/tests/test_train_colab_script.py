@@ -24,6 +24,29 @@ def test_train_colab_help_runs() -> None:
     assert "--positive-weight" in completed.stdout
     assert "--border-penalty-weight" in completed.stdout
     assert "--threshold-mode" in completed.stdout
+    assert "--data-mode" in completed.stdout
+    assert "--resume" in completed.stdout
+    assert "--checkpoint-every-epochs" in completed.stdout
+    assert "--calibrate-every-epochs" in completed.stdout
+    assert "--sample-plots-every-epochs" in completed.stdout
+    assert "--normalization-samples" in completed.stdout
+    assert "--run-root" in completed.stdout
+    assert "--full-test-eval" in completed.stdout
+    assert "--no-final-eval" in completed.stdout
+    assert "--dataset-dir" in completed.stdout
+    assert "--shard-size" in completed.stdout
+    assert "--generate-shards" in completed.stdout
+    assert "--shard-dtype" in completed.stdout
+    assert "--raw-signal-dtype" in completed.stdout
+    assert "--cache-dataset-dir" in completed.stdout
+    assert "--skip-existing-shards" in completed.stdout
+
+
+def test_train_colab_defaults_paper_to_sharded_mode() -> None:
+    from scripts.train_colab import default_data_mode
+
+    assert default_data_mode("paper") == "sharded"
+    assert default_data_mode("practical") == "materialized"
 
 
 def test_train_colab_sets_writable_matplotlib_config(monkeypatch) -> None:
