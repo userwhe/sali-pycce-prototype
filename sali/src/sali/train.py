@@ -217,6 +217,35 @@ def _validate_training_batches(sample_count: int, batch_size: int) -> bool:
     return drop_last
 
 
+def _iterable_worker_sample_counts(sample_count: int, num_workers: int) -> list[int]:
+    if num_workers < 0:
+        raise ValueError("num_workers must be non-negative")
+    worker_count = max(1, int(num_workers))
+    base_count, extra = divmod(int(sample_count), worker_count)
+    return [base_count + (1 if worker_id < extra else 0) for worker_id in range(worker_count)]
+
+
+def _validate_iterable_training_batches(sample_count: int, batch_size: int, num_workers: int) -> bool:
+    if batch_size < 2:
+        raise ValueError("training batch_size must be at least 2 for BatchNorm")
+    if sample_count < 2:
+        raise ValueError("training split must contain at least 2 samples for BatchNorm")
+    worker_counts = _iterable_worker_sample_counts(sample_count, num_workers)
+    drop_last = any(
+        count == 1 or _drops_singleton_final_batch(count, batch_size)
+        for count in worker_counts
+        if count > 0
+    )
+    effective_batches = sum(
+        _effective_train_batch_count(count, batch_size, drop_last)
+        for count in worker_counts
+        if count > 0
+    )
+    if effective_batches <= 0:
+        raise ValueError("effective training batch count must be greater than 0")
+    return drop_last
+
+
 def _training_samples_per_epoch(cfg: RunConfig, total_samples: int) -> int:
     samples_per_epoch = cfg.training.samples_per_epoch
     if samples_per_epoch is None:
@@ -396,7 +425,11 @@ def train_streamed_model(
     if num_workers < 0:
         raise ValueError("num_workers must be non-negative")
     train_sample_count = _training_samples_per_epoch(cfg, cfg.data.train_samples)
-    drop_last = _validate_training_batches(train_sample_count, cfg.training.batch_size)
+    drop_last = _validate_iterable_training_batches(
+        train_sample_count,
+        cfg.training.batch_size,
+        num_workers,
+    )
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = cfg.output_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -544,7 +577,11 @@ def train_sharded_model(
     manifest = load_shard_manifest(dataset_dir, cfg)
     stats = manifest.normalization_stats
     train_sample_count = _training_samples_per_epoch(cfg, cfg.data.train_samples)
-    drop_last = _validate_training_batches(train_sample_count, cfg.training.batch_size)
+    drop_last = _validate_iterable_training_batches(
+        train_sample_count,
+        cfg.training.batch_size,
+        num_workers,
+    )
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = cfg.output_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)

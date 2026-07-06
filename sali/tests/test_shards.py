@@ -87,6 +87,28 @@ def test_sharded_dataset_returns_torch_ready_tensors(tiny_config, tmp_path) -> N
     assert heatmap.dtype == torch.float32
 
 
+def test_sharded_dataset_capped_shuffle_uses_global_sample_order(tiny_config, tmp_path) -> None:
+    tiny_config.data.train_samples = 8
+    dataset_dir = tmp_path / "dataset"
+    manifest = generate_shards(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+
+    dataset = ShardedSaliDataset(
+        tiny_config,
+        dataset_dir,
+        "train",
+        max_samples=3,
+        epoch=1,
+        shuffle=True,
+    )
+    signal32, signal256, heatmap = next(iter(dataset))
+    expected = generate_indexed_sample(tiny_config, "train", 7, manifest.normalization_stats)
+
+    assert len(dataset) == 3
+    np.testing.assert_array_equal(signal32.numpy(), expected.signals[0:1])
+    np.testing.assert_array_equal(signal256.numpy(), expected.signals[1:2])
+    np.testing.assert_array_equal(heatmap.numpy(), expected.heatmap)
+
+
 def test_generate_shards_skips_existing_valid_shards(tiny_config, tmp_path) -> None:
     dataset_dir = tmp_path / "dataset"
     first = generate_shards(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)

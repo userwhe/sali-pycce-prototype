@@ -18,6 +18,7 @@ from sali.physics import Couplings
 
 SCHEMA_VERSION = 1
 DEFAULT_SHARD_DTYPE = np.float32
+SHARD_METADATA_KEY = "sali_shard_metadata_json"
 SUPPORTED_FLOAT_DTYPES = {"float32": np.float32, "float16": np.float16}
 
 
@@ -153,6 +154,7 @@ def _write_shard(
     *,
     shard_dtype: np.dtype,
     raw_signal_dtype: np.dtype,
+    metadata: dict[str, object] | None = None,
 ) -> None:
     count = stop - start
     signals = np.empty((count, 2, cfg.physics.signal_points), dtype=shard_dtype)
@@ -174,16 +176,18 @@ def _write_shard(
         nuclei_aperp[row, :count_i] = sample.nuclei.aperp_khz
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        path,
-        signals=signals,
-        raw_signals=raw_signals,
-        heatmaps=heatmaps,
-        nuclei_count=nuclei_count,
-        nuclei_az_khz=nuclei_az,
-        nuclei_aperp_khz=nuclei_aperp,
-        indices=indices,
-    )
+    payload: dict[str, np.ndarray] = {
+        "signals": signals,
+        "raw_signals": raw_signals,
+        "heatmaps": heatmaps,
+        "nuclei_count": nuclei_count,
+        "nuclei_az_khz": nuclei_az,
+        "nuclei_aperp_khz": nuclei_aperp,
+        "indices": indices,
+    }
+    if metadata is not None:
+        payload[SHARD_METADATA_KEY] = np.array(json.dumps(metadata, sort_keys=True))
+    np.savez_compressed(path, **payload)
 
 
 def generate_shards(
@@ -380,6 +384,28 @@ class ShardedSaliDataset(IterableDataset[tuple[torch.Tensor, torch.Tensor, torch
             ).generate_state(1)[0]
         )
         rng = np.random.default_rng(seed)
+        if self.shuffle and self.count < self.total_count:
+            shard_stops = np.array([shard.stop for shard in self.shards], dtype=np.int64)
+            loaded_shard_pos: int | None = None
+            arrays: dict[str, np.ndarray] | None = None
+            for position, global_index in enumerate(rng.permutation(self.total_count)[: self.count]):
+                if position % worker_count != worker_id:
+                    continue
+                shard_pos = int(np.searchsorted(shard_stops, int(global_index), side="right"))
+                shard = self.shards[shard_pos]
+                if loaded_shard_pos != shard_pos:
+                    arrays = _load_shard_arrays(self.dataset_dir / shard.path)
+                    loaded_shard_pos = shard_pos
+                assert arrays is not None
+                row = int(global_index) - shard.start
+                signals = arrays["signals"][row]
+                heatmap = arrays["heatmaps"][row]
+                yield (
+                    torch.from_numpy(signals[0:1]),
+                    torch.from_numpy(signals[1:2]),
+                    torch.from_numpy(heatmap),
+                )
+            return
         shard_order = np.arange(len(self.shards))
         if self.shuffle:
             rng.shuffle(shard_order)

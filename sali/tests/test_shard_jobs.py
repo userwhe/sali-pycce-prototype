@@ -101,6 +101,24 @@ def test_write_planned_shard_replaces_invalid_existing_file(tiny_config, tmp_pat
     assert arrays["indices"].tolist() == [0, 1, 2, 3]
 
 
+def test_write_planned_shard_rewrites_stale_plan_shard(tiny_config, tmp_path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    first_plan = prepare_shard_generation(tiny_config, dataset_dir, shard_size=4, normalization_samples=1)
+    first = write_planned_shard(tiny_config, dataset_dir, shard_id=0)
+    first_path = dataset_dir / first.path
+    stale_mtime_ns = 946684800_000_000_000
+    os.utime(first_path, ns=(stale_mtime_ns, stale_mtime_ns))
+
+    second_plan = prepare_shard_generation(tiny_config, dataset_dir, shard_size=4, normalization_samples=8)
+    assert second_plan.normalization_stats != first_plan.normalization_stats
+    rewritten = write_planned_shard(tiny_config, dataset_dir, shard_id=0, skip_existing=True)
+
+    arrays = np.load(dataset_dir / rewritten.path)
+    expected = generate_indexed_sample(tiny_config, "train", 0, second_plan.normalization_stats)
+    assert first_path.stat().st_mtime_ns != stale_mtime_ns
+    np.testing.assert_array_equal(arrays["signals"][0], expected.signals)
+
+
 def test_write_planned_shard_rejects_config_mismatch(tiny_config, tmp_path) -> None:
     dataset_dir = tmp_path / "dataset"
     prepare_shard_generation(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
@@ -116,6 +134,51 @@ def test_finalize_shard_generation_rejects_missing_shards(tiny_config, tmp_path)
     write_planned_shard(tiny_config, dataset_dir, shard_id=0)
 
     with pytest.raises(FileNotFoundError, match="missing shard file"):
+        finalize_shard_generation(tiny_config, dataset_dir)
+
+
+def test_finalize_shard_generation_rejects_shards_missing_plan_metadata(tiny_config, tmp_path) -> None:
+    from sali.shards import generate_shards
+
+    dataset_dir = tmp_path / "dataset"
+    generate_shards(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+    prepare_shard_generation(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+
+    with pytest.raises(ValueError, match="invalid shard file"):
+        finalize_shard_generation(tiny_config, dataset_dir)
+
+
+def test_finalize_shard_generation_rejects_mismatched_plan_metadata(tiny_config, tmp_path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    prepare_shard_generation(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+    first = write_planned_shard(tiny_config, dataset_dir, shard_id=0)
+    shard_path = dataset_dir / first.path
+    with np.load(shard_path) as arrays:
+        rewritten = {key: np.array(arrays[key]) for key in arrays.files}
+    rewritten["sali_shard_metadata_json"] = np.array(json.dumps({"wrong": "metadata"}))
+    np.savez_compressed(shard_path, **rewritten)
+    for shard_id in (1, 2, 3):
+        write_planned_shard(tiny_config, dataset_dir, shard_id=shard_id)
+
+    with pytest.raises(ValueError, match="invalid shard file"):
+        finalize_shard_generation(tiny_config, dataset_dir)
+
+
+def test_finalize_shard_generation_rejects_planned_dtype_mismatch(tiny_config, tmp_path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    prepare_shard_generation(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+    first = write_planned_shard(tiny_config, dataset_dir, shard_id=0)
+    shard_path = dataset_dir / first.path
+    with np.load(shard_path) as arrays:
+        rewritten = {key: np.array(arrays[key]) for key in arrays.files}
+        metadata = np.array(arrays["sali_shard_metadata_json"]) if "sali_shard_metadata_json" in arrays else np.array("{}")
+    rewritten["signals"] = rewritten["signals"].astype(np.float16)
+    rewritten["sali_shard_metadata_json"] = metadata
+    np.savez_compressed(shard_path, **rewritten)
+    for shard_id in (1, 2, 3):
+        write_planned_shard(tiny_config, dataset_dir, shard_id=shard_id)
+
+    with pytest.raises(ValueError, match="invalid shard file"):
         finalize_shard_generation(tiny_config, dataset_dir)
 
 

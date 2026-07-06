@@ -13,6 +13,7 @@ from sali.config import RunConfig
 from sali.data import NormalizationStats, _split_count, estimate_normalization_stats
 from sali.shards import (
     SCHEMA_VERSION,
+    SHARD_METADATA_KEY,
     ShardInfo,
     ShardManifest,
     _manifest_to_json,
@@ -154,9 +155,12 @@ def prepare_shard_generation(
     shard_dtype: str = "float32",
     raw_signal_dtype: str = "float32",
 ) -> ShardGenerationPlan:
+    if shard_size <= 0:
+        raise ValueError("shard_size must be positive")
     dataset_dir.mkdir(parents=True, exist_ok=True)
     signal_dtype = dtype_from_name(shard_dtype)
     raw_dtype = dtype_from_name(raw_signal_dtype)
+    shards = build_shard_plan(cfg, shard_size)
     stats = estimate_normalization_stats(cfg, sample_limit=normalization_samples)
     if not np.isfinite(stats.mean) or not np.isfinite(stats.var):
         raise FloatingPointError("normalization statistics are non-finite")
@@ -177,7 +181,7 @@ def prepare_shard_generation(
             "indices": "int64",
         },
         normalization_stats=stats,
-        shards=build_shard_plan(cfg, shard_size),
+        shards=shards,
         generated_at=datetime.now(timezone.utc).isoformat(),
     )
     save_generation_plan(dataset_dir / GENERATION_PLAN, plan)
@@ -196,10 +200,62 @@ def _entry_by_id(plan: ShardGenerationPlan, shard_id: int) -> ShardPlanEntry:
     raise IndexError(f"shard_id {shard_id} is out of range for {len(plan.shards)} planned shards")
 
 
+def _stats_metadata(stats: NormalizationStats) -> dict[str, float]:
+    return {"mean": float(stats.mean), "var": float(stats.var), "epsilon": float(stats.epsilon)}
+
+
+def _planned_shard_metadata(plan: ShardGenerationPlan, entry: ShardPlanEntry) -> dict[str, object]:
+    return {
+        "schema_version": int(plan.schema_version),
+        "data_mode": str(plan.data_mode),
+        "config_hash": str(plan.config_hash),
+        "split": str(entry.split),
+        "start": int(entry.start),
+        "stop": int(entry.stop),
+        "count": int(entry.count),
+        "shard_size": int(plan.shard_size),
+        "dtypes": dict(plan.dtypes),
+        "normalization_stats": _stats_metadata(plan.normalization_stats),
+    }
+
+
+def _read_shard_metadata(arrays: Any) -> dict[str, object] | None:
+    if SHARD_METADATA_KEY not in arrays.files:
+        return None
+    try:
+        raw = arrays[SHARD_METADATA_KEY]
+        value = raw.item() if raw.shape == () else raw.tolist()
+        if not isinstance(value, str):
+            return None
+        payload = json.loads(value)
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _validate_planned_shard(
+    path: Path,
+    plan: ShardGenerationPlan,
+    entry: ShardPlanEntry,
+    cfg: RunConfig,
+) -> bool:
+    if not _validate_shard_arrays(path, entry.count, entry.start, entry.stop, cfg):
+        return False
+    expected_dtypes = {key: np.dtype(value) for key, value in plan.dtypes.items()}
+    try:
+        with np.load(path) as arrays:
+            if any(arrays[key].dtype != dtype for key, dtype in expected_dtypes.items()):
+                return False
+            return _read_shard_metadata(arrays) == _planned_shard_metadata(plan, entry)
+    except Exception:
+        return False
+
+
 def _temp_shard_path(dataset_dir: Path, entry: ShardPlanEntry) -> Path:
-    job_id = os.environ.get("SLURM_JOB_ID", str(os.getpid()))
+    pid = str(os.getpid())
+    job_id = os.environ.get("SLURM_JOB_ID", pid)
     task_id = os.environ.get("SLURM_ARRAY_TASK_ID", str(entry.shard_id))
-    return dataset_dir / f"{entry.path}.tmp-{job_id}-{task_id}.npz"
+    return dataset_dir / f"{entry.path}.tmp-{job_id}-{task_id}-{pid}.npz"
 
 
 def write_planned_shard(
@@ -216,7 +272,7 @@ def write_planned_shard(
     signal_dtype = dtype_from_name(plan.dtypes["signals"])
     raw_dtype = dtype_from_name(plan.dtypes["raw_signals"])
 
-    if skip_existing and _validate_shard_arrays(target_path, entry.count, entry.start, entry.stop, cfg):
+    if skip_existing and _validate_planned_shard(target_path, plan, entry, cfg):
         return entry
 
     temp_path = _temp_shard_path(dataset_dir, entry)
@@ -232,8 +288,9 @@ def write_planned_shard(
             temp_path,
             shard_dtype=signal_dtype,
             raw_signal_dtype=raw_dtype,
+            metadata=_planned_shard_metadata(plan, entry),
         )
-        if not _validate_shard_arrays(temp_path, entry.count, entry.start, entry.stop, cfg):
+        if not _validate_planned_shard(temp_path, plan, entry, cfg):
             raise ValueError(f"temporary shard failed validation: {temp_path}")
         os.replace(temp_path, target_path)
     finally:
@@ -250,7 +307,7 @@ def validate_planned_shards(cfg: RunConfig, dataset_dir: Path) -> list[ShardPlan
         path = dataset_dir / entry.path
         if not path.exists():
             raise FileNotFoundError(f"missing shard file: {path}")
-        if not _validate_shard_arrays(path, entry.count, entry.start, entry.stop, cfg):
+        if not _validate_planned_shard(path, plan, entry, cfg):
             invalid.append(entry)
     return invalid
 

@@ -91,6 +91,25 @@ def test_train_model_rejects_single_item_training_split(tiny_config, tmp_path) -
         train_model(tiny_config, splits)
 
 
+def test_iterable_training_batches_drop_singletons_per_worker() -> None:
+    drop_last = train_module._validate_iterable_training_batches(
+        sample_count=6,
+        batch_size=2,
+        num_workers=4,
+    )
+
+    assert drop_last is True
+
+
+def test_iterable_training_batches_reject_when_workers_have_no_full_batch() -> None:
+    with pytest.raises(ValueError, match="effective training batch count"):
+        train_module._validate_iterable_training_batches(
+            sample_count=2,
+            batch_size=2,
+            num_workers=2,
+        )
+
+
 def test_train_model_drops_singleton_final_training_batch(tiny_config, tmp_path) -> None:
     tiny_config.output_dir = tmp_path / "singleton-run"
     tiny_config.data.train_samples = 5
