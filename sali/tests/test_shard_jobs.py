@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -80,6 +79,8 @@ def test_write_planned_shard_skips_existing_valid_file(tiny_config, tmp_path) ->
     prepare_shard_generation(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
     first = write_planned_shard(tiny_config, dataset_dir, shard_id=0)
     first_path = dataset_dir / first.path
+    sentinel_mtime_ns = 946684800_000_000_000
+    os.utime(first_path, ns=(sentinel_mtime_ns, sentinel_mtime_ns))
     first_mtime = first_path.stat().st_mtime_ns
 
     second = write_planned_shard(tiny_config, dataset_dir, shard_id=0, skip_existing=True)
