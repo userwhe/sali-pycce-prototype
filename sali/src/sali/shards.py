@@ -346,6 +346,7 @@ class ShardedSaliDataset(IterableDataset[tuple[torch.Tensor, torch.Tensor, torch
         dataset_dir: Path,
         split: str,
         *,
+        max_samples: int | None = None,
         epoch: int = 0,
         shuffle: bool = False,
     ) -> None:
@@ -358,7 +359,12 @@ class ShardedSaliDataset(IterableDataset[tuple[torch.Tensor, torch.Tensor, torch
         self.shards = [shard for shard in self.manifest.shards if shard.split == split]
         if not self.shards:
             raise ValueError(f"manifest contains no shards for split {split}")
-        self.count = sum(shard.count for shard in self.shards)
+        self.total_count = sum(shard.count for shard in self.shards)
+        self.count = self.total_count
+        if max_samples is not None:
+            if max_samples <= 0:
+                raise ValueError("max_samples must be positive")
+            self.count = min(self.total_count, int(max_samples))
 
     def __len__(self) -> int:
         return self.count
@@ -385,6 +391,8 @@ class ShardedSaliDataset(IterableDataset[tuple[torch.Tensor, torch.Tensor, torch
             if self.shuffle:
                 rng.shuffle(row_order)
             for row in row_order:
+                if position >= self.count:
+                    return
                 if position % worker_count == worker_id:
                     signals = arrays["signals"][int(row)]
                     heatmap = arrays["heatmaps"][int(row)]

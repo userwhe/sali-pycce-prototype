@@ -68,6 +68,7 @@ class ModelConfig:
 class TrainingConfig:
     batch_size: int = 64
     max_epochs: int = 250
+    samples_per_epoch: int | None = None
     learning_rate: float = 0.001
     lr_reduction_factor: float = 0.7
     lr_plateau_patience: int = 5

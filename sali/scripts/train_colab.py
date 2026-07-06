@@ -108,6 +108,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-samples", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument(
+        "--samples-per-epoch",
+        type=int,
+        default=None,
+        help="Limit train examples consumed per epoch; default uses the full train split.",
+    )
     parser.add_argument("--loss-type", choices=["mse", "weighted_mse", "weighted_bce"], default=None)
     parser.add_argument("--positive-weight", type=float, default=None)
     parser.add_argument("--border-penalty-weight", type=float, default=None)
@@ -146,6 +152,8 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         cfg.training.max_epochs = args.epochs
     if args.batch_size is not None:
         cfg.training.batch_size = args.batch_size
+    if args.samples_per_epoch is not None:
+        cfg.training.samples_per_epoch = args.samples_per_epoch
     if args.loss_type is not None:
         cfg.training.loss_type = args.loss_type
     if args.positive_weight is not None:

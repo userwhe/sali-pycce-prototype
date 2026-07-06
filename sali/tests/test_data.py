@@ -6,7 +6,16 @@ import torch
 
 import sali.data as data_module
 from sali.config import paper_config
-from sali.data import SaliDataset, generate_splits
+from sali.data import (
+    NormalizationStats,
+    Sample,
+    SaliDataset,
+    StreamedSaliDataset,
+    estimate_normalization_stats,
+    generate_splits,
+    materialize_streamed_samples,
+)
+from sali.physics import Couplings
 
 
 def _raise_if_generating(*_args, **_kwargs) -> None:
@@ -146,3 +155,92 @@ def test_generate_splits_repeated_seed_is_identical(tiny_config) -> None:
         np.testing.assert_array_equal(first.heatmap, second.heatmap)
         np.testing.assert_array_equal(first.nuclei.az_khz, second.nuclei.az_khz)
         np.testing.assert_array_equal(first.nuclei.aperp_khz, second.nuclei.aperp_khz)
+
+
+def test_streamed_dataset_returns_torch_ready_arrays(tiny_config) -> None:
+    stats = estimate_normalization_stats(tiny_config, sample_limit=4)
+    dataset = StreamedSaliDataset(tiny_config, "train", stats)
+    signal32, signal256, heatmap = next(iter(dataset))
+
+    assert len(dataset) == tiny_config.data.train_samples
+    assert tuple(signal32.shape) == (1, 1000)
+    assert tuple(signal256.shape) == (1, 1000)
+    assert tuple(heatmap.shape) == (1, 204, 104)
+    assert signal32.dtype == torch.float32
+    assert signal256.dtype == torch.float32
+    assert heatmap.dtype == torch.float32
+
+
+def test_streamed_dataset_max_samples_shuffles_from_full_split(tiny_config, monkeypatch) -> None:
+    tiny_config.data.train_samples = 8
+    stats = NormalizationStats(mean=0.0, var=1.0, epsilon=tiny_config.data.norm_epsilon)
+    calls: list[int] = []
+
+    def fake_generate_indexed_sample(cfg, split, index, sample_stats):
+        calls.append(int(index))
+        return Sample(
+            signals=np.zeros((2, cfg.physics.signal_points), dtype=np.float32),
+            raw_signals=np.zeros((2, cfg.physics.signal_points), dtype=np.float32),
+            heatmap=np.zeros((1, cfg.model.output_height, cfg.model.output_width), dtype=np.float32),
+            nuclei=Couplings(
+                az_khz=np.array([1.0], dtype=np.float32),
+                aperp_khz=np.array([2.0], dtype=np.float32),
+            ),
+            split=split,
+        )
+
+    monkeypatch.setattr(data_module, "generate_indexed_sample", fake_generate_indexed_sample)
+
+    dataset = StreamedSaliDataset(tiny_config, "train", stats, max_samples=3, epoch=1, shuffle=True)
+    list(dataset)
+
+    assert len(dataset) == 3
+    assert calls == [7, 1, 4]
+
+
+def test_streamed_samples_repeated_seed_is_identical(tiny_config) -> None:
+    stats = estimate_normalization_stats(tiny_config, sample_limit=4)
+
+    first = materialize_streamed_samples(tiny_config, "train", stats, max_samples=3)
+    second = materialize_streamed_samples(tiny_config, "train", stats, max_samples=3)
+
+    for first_sample, second_sample in zip(first, second, strict=True):
+        np.testing.assert_array_equal(first_sample.raw_signals, second_sample.raw_signals)
+        np.testing.assert_array_equal(first_sample.signals, second_sample.signals)
+        np.testing.assert_array_equal(first_sample.heatmap, second_sample.heatmap)
+        np.testing.assert_array_equal(first_sample.nuclei.az_khz, second_sample.nuclei.az_khz)
+        np.testing.assert_array_equal(first_sample.nuclei.aperp_khz, second_sample.nuclei.aperp_khz)
+
+
+def test_streamed_validation_and_test_do_not_depend_on_train_sample_count(tiny_config) -> None:
+    stats = estimate_normalization_stats(tiny_config, sample_limit=4)
+    base_val = materialize_streamed_samples(tiny_config, "val", stats, max_samples=2)
+    base_test = materialize_streamed_samples(tiny_config, "test", stats, max_samples=2)
+
+    changed_config = tiny_config
+    changed_config.data.train_samples += 5
+    changed_stats = estimate_normalization_stats(changed_config, sample_limit=4)
+    changed_val = materialize_streamed_samples(changed_config, "val", changed_stats, max_samples=2)
+    changed_test = materialize_streamed_samples(changed_config, "test", changed_stats, max_samples=2)
+
+    for base, changed in zip(base_val, changed_val, strict=True):
+        np.testing.assert_array_equal(base.raw_signals, changed.raw_signals)
+    for base, changed in zip(base_test, changed_test, strict=True):
+        np.testing.assert_array_equal(base.raw_signals, changed.raw_signals)
+
+
+def test_estimate_normalization_stats_uses_requested_sample_limit(tiny_config, monkeypatch) -> None:
+    calls: list[int] = []
+    original = data_module.generate_indexed_sample
+
+    def tracking_generate_indexed_sample(*args, **kwargs):
+        calls.append(int(args[2]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(data_module, "generate_indexed_sample", tracking_generate_indexed_sample)
+
+    stats = estimate_normalization_stats(tiny_config, sample_limit=3)
+
+    assert np.isfinite(stats.mean)
+    assert np.isfinite(stats.var)
+    assert calls == [0, 1, 2]

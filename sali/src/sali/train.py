@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from sali.config import RunConfig
 from sali.data import (
@@ -217,6 +217,30 @@ def _validate_training_batches(sample_count: int, batch_size: int) -> bool:
     return drop_last
 
 
+def _training_samples_per_epoch(cfg: RunConfig, total_samples: int) -> int:
+    samples_per_epoch = cfg.training.samples_per_epoch
+    if samples_per_epoch is None:
+        return total_samples
+    if samples_per_epoch < 2:
+        raise ValueError("samples_per_epoch must be at least 2 for BatchNorm")
+    return min(total_samples, int(samples_per_epoch))
+
+
+def _materialized_train_dataset_for_epoch(
+    samples: list[Sample],
+    *,
+    sample_count: int,
+    seed: int,
+    epoch: int,
+) -> SaliDataset | Subset:
+    dataset = SaliDataset(samples)
+    if sample_count >= len(samples):
+        return dataset
+    rng = np.random.default_rng(np.random.SeedSequence([seed, epoch]))
+    indices = rng.permutation(len(samples))[:sample_count].astype(int).tolist()
+    return Subset(dataset, indices)
+
+
 def _save_full_checkpoint(
     path: Path,
     *,
@@ -292,18 +316,12 @@ def _write_run_state(
 
 
 def train_model(cfg: RunConfig, splits: DataSplits) -> TrainResult:
-    drop_last = _validate_training_batches(len(splits.train), cfg.training.batch_size)
+    train_sample_count = _training_samples_per_epoch(cfg, len(splits.train))
+    drop_last = _validate_training_batches(train_sample_count, cfg.training.batch_size)
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     device = choose_device(cfg.training.device)
     _set_torch_seed(cfg.data.seed)
     model = SaliNet(cfg.model).to(device)
-    train_loader = DataLoader(
-        SaliDataset(splits.train),
-        batch_size=cfg.training.batch_size,
-        shuffle=True,
-        drop_last=drop_last,
-        generator=_seeded_generator(cfg.data.seed),
-    )
     val_loader = DataLoader(
         SaliDataset(splits.val),
         batch_size=cfg.training.batch_size,
@@ -324,7 +342,20 @@ def train_model(cfg: RunConfig, splits: DataSplits) -> TrainResult:
     best_state = _cpu_state_dict(model)
     best_checkpoint = cfg.output_dir / "best_model.pt"
     stale_epochs = 0
-    for _epoch in range(cfg.training.max_epochs):
+    for epoch in range(1, cfg.training.max_epochs + 1):
+        train_dataset = _materialized_train_dataset_for_epoch(
+            splits.train,
+            sample_count=train_sample_count,
+            seed=cfg.data.seed,
+            epoch=epoch,
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=cfg.training.batch_size,
+            shuffle=train_sample_count >= len(splits.train),
+            drop_last=drop_last,
+            generator=_seeded_generator(cfg.data.seed + epoch),
+        )
         train_loss = _run_epoch(model, train_loader, criterion, device, optimizer)
         val_loss = _run_epoch(model, val_loader, criterion, device, None)
         scheduler.step(val_loss)
@@ -364,7 +395,8 @@ def train_streamed_model(
         raise ValueError("checkpoint_every_epochs must be at least 1")
     if num_workers < 0:
         raise ValueError("num_workers must be non-negative")
-    drop_last = _validate_training_batches(cfg.data.train_samples, cfg.training.batch_size)
+    train_sample_count = _training_samples_per_epoch(cfg, cfg.data.train_samples)
+    drop_last = _validate_training_batches(train_sample_count, cfg.training.batch_size)
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = cfg.output_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -418,7 +450,14 @@ def train_streamed_model(
     latest_checkpoint = checkpoint_dir / "latest.pt"
     for epoch in range(start_epoch, cfg.training.max_epochs + 1):
         train_loader = DataLoader(
-            StreamedSaliDataset(cfg, "train", stats, epoch=epoch, shuffle=True),
+            StreamedSaliDataset(
+                cfg,
+                "train",
+                stats,
+                max_samples=train_sample_count,
+                epoch=epoch,
+                shuffle=True,
+            ),
             batch_size=cfg.training.batch_size,
             shuffle=False,
             drop_last=drop_last,
@@ -504,7 +543,8 @@ def train_sharded_model(
         raise ValueError("num_workers must be non-negative")
     manifest = load_shard_manifest(dataset_dir, cfg)
     stats = manifest.normalization_stats
-    drop_last = _validate_training_batches(cfg.data.train_samples, cfg.training.batch_size)
+    train_sample_count = _training_samples_per_epoch(cfg, cfg.data.train_samples)
+    drop_last = _validate_training_batches(train_sample_count, cfg.training.batch_size)
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = cfg.output_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -558,7 +598,14 @@ def train_sharded_model(
     latest_checkpoint = checkpoint_dir / "latest.pt"
     for epoch in range(start_epoch, cfg.training.max_epochs + 1):
         train_loader = DataLoader(
-            ShardedSaliDataset(cfg, dataset_dir, "train", epoch=epoch, shuffle=True),
+            ShardedSaliDataset(
+                cfg,
+                dataset_dir,
+                "train",
+                max_samples=train_sample_count,
+                epoch=epoch,
+                shuffle=True,
+            ),
             batch_size=cfg.training.batch_size,
             shuffle=False,
             drop_last=drop_last,

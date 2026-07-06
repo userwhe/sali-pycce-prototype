@@ -280,6 +280,53 @@ def test_train_sharded_model_resume_continues_next_epoch(tiny_config, tmp_path) 
     assert len(result.history["val_loss"]) == 2
 
 
+def test_train_sharded_model_uses_samples_per_epoch(tiny_config, tmp_path, monkeypatch) -> None:
+    from sali.shards import generate_shards
+    from sali.train import train_sharded_model
+
+    class TinyNet(nn.Module):
+        def __init__(self, _cfg) -> None:
+            super().__init__()
+            self.weight = nn.Parameter(torch.tensor([0.0]))
+
+    seen_train_lengths: list[int] = []
+
+    def fake_run_epoch(model, loader, _criterion, _device, optimizer) -> float:
+        if optimizer is not None:
+            seen_train_lengths.append(len(loader.dataset))
+            with torch.no_grad():
+                model.weight.add_(1.0)
+            return 0.2
+        return 0.1
+
+    dataset_dir = tmp_path / "dataset"
+    generate_shards(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+    tiny_config.output_dir = tmp_path / "sharded-samples-per-epoch"
+    tiny_config.training.batch_size = 2
+    tiny_config.training.max_epochs = 1
+    tiny_config.training.samples_per_epoch = 3
+    monkeypatch.setattr(train_module, "SaliNet", TinyNet)
+    monkeypatch.setattr(train_module, "_run_epoch", fake_run_epoch)
+
+    train_sharded_model(tiny_config, dataset_dir, checkpoint_every_epochs=1)
+
+    assert seen_train_lengths == [3]
+
+
+def test_train_sharded_model_rejects_single_sample_epoch(tiny_config, tmp_path) -> None:
+    from sali.shards import generate_shards
+    from sali.train import train_sharded_model
+
+    dataset_dir = tmp_path / "dataset"
+    generate_shards(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+    tiny_config.output_dir = tmp_path / "single-sample-epoch"
+    tiny_config.training.batch_size = 2
+    tiny_config.training.samples_per_epoch = 1
+
+    with pytest.raises(ValueError, match="samples_per_epoch.*at least 2"):
+        train_sharded_model(tiny_config, dataset_dir, checkpoint_every_epochs=1)
+
+
 def test_train_sharded_model_does_not_generate_samples_or_heatmaps(tiny_config, tmp_path, monkeypatch) -> None:
     from sali.shards import generate_shards
     from sali.train import train_sharded_model

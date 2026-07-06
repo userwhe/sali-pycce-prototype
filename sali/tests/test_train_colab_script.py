@@ -40,6 +40,7 @@ def test_train_colab_help_runs() -> None:
     assert "--raw-signal-dtype" in completed.stdout
     assert "--cache-dataset-dir" in completed.stdout
     assert "--skip-existing-shards" in completed.stdout
+    assert "--samples-per-epoch" in completed.stdout
 
 
 def test_train_colab_defaults_paper_to_sharded_mode() -> None:
@@ -47,6 +48,21 @@ def test_train_colab_defaults_paper_to_sharded_mode() -> None:
 
     assert default_data_mode("paper") == "sharded"
     assert default_data_mode("practical") == "materialized"
+
+
+def test_train_colab_applies_samples_per_epoch(monkeypatch) -> None:
+    from scripts.train_colab import config_from_args, parse_args
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["train_colab.py", "--preset", "paper", "--samples-per-epoch", "12345"],
+    )
+
+    args = parse_args()
+    cfg = config_from_args(args)
+
+    assert cfg.training.samples_per_epoch == 12345
 
 
 def test_train_colab_sets_writable_matplotlib_config(monkeypatch) -> None:
