@@ -29,12 +29,6 @@ else
   git clone --branch "${REPO_BRANCH}" "${REPO_URL}" "${REPO_DIR}"
 fi
 
-python3 -m venv "${VENV}"
-source "${VENV}/bin/activate"
-python -m pip install --upgrade pip
-python -m pip install -e "${REPO_DIR}[dev]"
-python "${REPO_DIR}/scripts/shard_jobs.py" --help >/dev/null
-
 hyakstorage --home || true
 hyakstorage /gscratch/scrubbed/whe3 || true
 df -h /gscratch/scrubbed/whe3 || true
@@ -51,10 +45,19 @@ fi
 
 cd "${REPO_DIR}"
 
-submit_prepare() {
+submit_env() {
   sbatch --parsable \
     -A "${SALI_HYAK_ACCOUNT}" \
     -p "${SALI_HYAK_PARTITION}" \
+    scripts/hyak/setup_env.slurm
+}
+
+submit_prepare() {
+  local dependency="$1"
+  sbatch --parsable \
+    -A "${SALI_HYAK_ACCOUNT}" \
+    -p "${SALI_HYAK_PARTITION}" \
+    --dependency="afterok:${dependency}" \
     scripts/hyak/prepare_shards.slurm
 }
 
@@ -78,7 +81,16 @@ submit_finalize() {
     scripts/hyak/finalize_shards.slurm
 }
 
-prepare_job="$(submit_prepare)"
+env_job="$(submit_env)"
+env_job="${env_job%%;*}"
+echo "env setup job: ${env_job}"
+
+if [[ "${SUBMIT_MODE}" == "env" ]]; then
+  squeue -u "$(whoami)" || true
+  exit 0
+fi
+
+prepare_job="$(submit_prepare "${env_job}")"
 prepare_job="${prepare_job%%;*}"
 echo "prepare job: ${prepare_job}"
 
@@ -100,7 +112,7 @@ case "${SUBMIT_MODE}" in
     ;;
   *)
     echo "ERROR: unsupported SALI_SUBMIT_MODE=${SUBMIT_MODE}" >&2
-    echo "Use setup, prepare, pilot, or full." >&2
+    echo "Use setup, env, prepare, pilot, or full." >&2
     exit 2
     ;;
 esac

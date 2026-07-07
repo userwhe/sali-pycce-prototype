@@ -64,9 +64,9 @@ ssh whe3@klone.hyak.uw.edu 'SALI_SUBMIT_MODE=setup bash -s' < scripts/hyak/boots
 ```
 
 That command clones the pushed `codex/sali-reproduction` branch from GitHub,
-builds the venv under `/gscratch/scrubbed/whe3/sali`, prints storage status, and
-prints `hyakalloc`. After choosing the account and partition from `hyakalloc`,
-submit the prepare plus four-shard pilot with:
+prints storage status, and prints `hyakalloc`. After choosing the account and
+partition from `hyakalloc`, submit the compute-node environment setup, prepare
+job, and four-shard pilot with:
 
 ```bash
 ssh whe3@klone.hyak.uw.edu \
@@ -74,9 +74,9 @@ ssh whe3@klone.hyak.uw.edu \
   < scripts/hyak/bootstrap_from_github.sh
 ```
 
-The helper supports `SALI_SUBMIT_MODE=setup`, `prepare`, `pilot`, and `full`.
-Use `pilot` first; `full` submits prepare, all 360 shard-array tasks, and
-finalize with Slurm dependencies.
+The helper supports `SALI_SUBMIT_MODE=setup`, `env`, `prepare`, `pilot`, and
+`full`. Use `pilot` first; `full` submits environment setup, prepare, all 360
+shard-array tasks, and finalize with Slurm dependencies.
 
 ## Local Hyak Smoke Test
 
