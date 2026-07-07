@@ -3,7 +3,9 @@
 set -euo pipefail
 
 WORK_ROOT="${SALI_WORK_ROOT:-/gscratch/scrubbed/whe3/sali}"
-REPO_DIR="${WORK_ROOT}/repo"
+CHECKOUT_DIR="${WORK_ROOT}/repo"
+PROJECT_SUBDIR="${SALI_PROJECT_SUBDIR:-sali}"
+PROJECT_DIR="${CHECKOUT_DIR}/${PROJECT_SUBDIR}"
 VENV="${WORK_ROOT}/venv"
 REPO_URL="${SALI_REPO_URL:-https://github.com/userwhe/sali-pycce-prototype.git}"
 REPO_BRANCH="${SALI_REPO_BRANCH:-codex/sali-reproduction}"
@@ -17,17 +19,27 @@ echo "submit mode: ${SUBMIT_MODE}"
 
 mkdir -p "${WORK_ROOT}/logs" "${WORK_ROOT}/datasets"
 
-if [[ -d "${REPO_DIR}/.git" ]]; then
-  git -C "${REPO_DIR}" fetch origin "${REPO_BRANCH}"
-  git -C "${REPO_DIR}" checkout "${REPO_BRANCH}"
-  git -C "${REPO_DIR}" reset --hard "origin/${REPO_BRANCH}"
-elif [[ -e "${REPO_DIR}" ]]; then
-  echo "ERROR: ${REPO_DIR} exists but is not a git checkout." >&2
+if [[ -d "${CHECKOUT_DIR}/.git" ]]; then
+  git -C "${CHECKOUT_DIR}" fetch origin "${REPO_BRANCH}"
+  git -C "${CHECKOUT_DIR}" checkout "${REPO_BRANCH}"
+  git -C "${CHECKOUT_DIR}" reset --hard "origin/${REPO_BRANCH}"
+elif [[ -e "${CHECKOUT_DIR}" ]]; then
+  echo "ERROR: ${CHECKOUT_DIR} exists but is not a git checkout." >&2
   echo "Move it aside or set SALI_WORK_ROOT to a new directory." >&2
   exit 1
 else
-  git clone --branch "${REPO_BRANCH}" "${REPO_URL}" "${REPO_DIR}"
+  git clone --branch "${REPO_BRANCH}" "${REPO_URL}" "${CHECKOUT_DIR}"
 fi
+
+if [[ ! -f "${PROJECT_DIR}/pyproject.toml" ]]; then
+  if [[ -f "${CHECKOUT_DIR}/pyproject.toml" ]]; then
+    PROJECT_DIR="${CHECKOUT_DIR}"
+  else
+    echo "ERROR: could not find SALI pyproject.toml in ${PROJECT_DIR} or ${CHECKOUT_DIR}" >&2
+    exit 1
+  fi
+fi
+echo "project dir: ${PROJECT_DIR}"
 
 hyakstorage --home || true
 hyakstorage /gscratch/scrubbed/whe3 || true
@@ -43,7 +55,7 @@ fi
 : "${SALI_HYAK_ACCOUNT:?Set SALI_HYAK_ACCOUNT to the exact account shown by hyakalloc}"
 : "${SALI_HYAK_PARTITION:?Set SALI_HYAK_PARTITION to the exact partition shown by hyakalloc}"
 
-cd "${REPO_DIR}"
+cd "${PROJECT_DIR}"
 
 submit_env() {
   sbatch --parsable \

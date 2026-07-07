@@ -12,14 +12,19 @@
 set -euo pipefail
 
 WORK_ROOT=/gscratch/scrubbed/whe3/sali
-REPO_DIR="${WORK_ROOT}/repo"
+CHECKOUT_DIR="${WORK_ROOT}/repo"
+PROJECT_DIR="${CHECKOUT_DIR}/sali"
 VENV="${WORK_ROOT}/venv"
 
+if [[ ! -f "${PROJECT_DIR}/pyproject.toml" ]]; then
+  PROJECT_DIR="${CHECKOUT_DIR}"
+fi
+
 mkdir -p "${WORK_ROOT}/logs" "${WORK_ROOT}/datasets"
-cd "${REPO_DIR}"
+cd "${PROJECT_DIR}"
 
 python3 -m venv "${VENV}"
 source "${VENV}/bin/activate"
 python -m pip install --upgrade pip
-python -m pip install -e "${REPO_DIR}[dev]"
+python -m pip install -e "${PROJECT_DIR}[dev]"
 python scripts/shard_jobs.py --help >/dev/null

@@ -64,9 +64,10 @@ ssh whe3@klone.hyak.uw.edu 'SALI_SUBMIT_MODE=setup bash -s' < scripts/hyak/boots
 ```
 
 That command clones the pushed `codex/sali-reproduction` branch from GitHub,
-prints storage status, and prints `hyakalloc`. After choosing the account and
-partition from `hyakalloc`, submit the compute-node environment setup, prepare
-job, and four-shard pilot with:
+uses the `sali/` project subdirectory in the checkout when present, prints
+storage status, and prints `hyakalloc`. After choosing the account and partition
+from `hyakalloc`, submit the compute-node environment setup, prepare job, and
+four-shard pilot with:
 
 ```bash
 ssh whe3@klone.hyak.uw.edu \
