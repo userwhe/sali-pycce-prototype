@@ -54,9 +54,12 @@ case "${MODE}" in
   count)
     ssh "${LOGIN}" "find ${WORK_ROOT}/datasets/paper-low-full -maxdepth 1 -name '*.npz' 2>/dev/null | wc -l; du -sh ${WORK_ROOT}/datasets/paper-low-full 2>/dev/null || true"
     ;;
+  logs)
+    ssh "${LOGIN}" "ls -lt ${WORK_ROOT}/logs 2>/dev/null | head -20; for f in ${WORK_ROOT}/logs/sali-setup-env-*.err ${WORK_ROOT}/logs/sali-setup-env-*.out ${WORK_ROOT}/logs/sali-shard-prepare-*.err ${WORK_ROOT}/logs/sali-shard-prepare-*.out ${WORK_ROOT}/logs/sali-shard-array-*.err ${WORK_ROOT}/logs/sali-shard-array-*.out; do [ -f \"\$f\" ] || continue; echo; echo ===== \"\$f\" =====; tail -120 \"\$f\"; done"
+    ;;
   *)
     cat >&2 <<EOF
-Usage: $0 [setup|env|prepare|pilot|full|queue|storage|count]
+Usage: $0 [setup|env|prepare|pilot|full|queue|storage|count|logs]
 
 Environment overrides:
   SALI_HYAK_LOGIN      default: whe3@klone.hyak.uw.edu
