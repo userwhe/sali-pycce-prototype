@@ -63,6 +63,19 @@ multiple interactive SSH commands by running the bootstrap helper from your Mac:
 ssh whe3@klone.hyak.uw.edu 'SALI_SUBMIT_MODE=setup bash -s' < scripts/hyak/bootstrap_from_github.sh
 ```
 
+For repeated use, prefer the local wrapper:
+
+```bash
+scripts/hyak/submit.sh setup
+scripts/hyak/submit.sh pilot
+scripts/hyak/submit.sh queue
+scripts/hyak/submit.sh count
+```
+
+The wrapper defaults to `SALI_HYAK_ACCOUNT=stf` and
+`SALI_HYAK_PARTITION=compute-hugemem`; override those environment variables if
+`hyakalloc` changes.
+
 That command clones the pushed `codex/sali-reproduction` branch from GitHub,
 uses the `sali/` project subdirectory in the checkout when present, prints
 storage status, and prints `hyakalloc`. After choosing the account and partition
