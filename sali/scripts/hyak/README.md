@@ -56,6 +56,28 @@ python -m pip install -e 'repo[dev]'
 mkdir -p logs datasets
 ```
 
+If you are using the normal Hyak password + Duo login flow, you can avoid
+multiple interactive SSH commands by running the bootstrap helper from your Mac:
+
+```bash
+ssh whe3@klone.hyak.uw.edu 'SALI_SUBMIT_MODE=setup bash -s' < scripts/hyak/bootstrap_from_github.sh
+```
+
+That command clones the pushed `codex/sali-reproduction` branch from GitHub,
+builds the venv under `/gscratch/scrubbed/whe3/sali`, prints storage status, and
+prints `hyakalloc`. After choosing the account and partition from `hyakalloc`,
+submit the prepare plus four-shard pilot with:
+
+```bash
+ssh whe3@klone.hyak.uw.edu \
+  'SALI_HYAK_ACCOUNT=<account> SALI_HYAK_PARTITION=<partition> SALI_SUBMIT_MODE=pilot bash -s' \
+  < scripts/hyak/bootstrap_from_github.sh
+```
+
+The helper supports `SALI_SUBMIT_MODE=setup`, `prepare`, `pilot`, and `full`.
+Use `pilot` first; `full` submits prepare, all 360 shard-array tasks, and
+finalize with Slurm dependencies.
+
 ## Local Hyak Smoke Test
 
 Use an interactive or short batch job to run:
