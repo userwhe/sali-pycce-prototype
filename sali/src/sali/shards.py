@@ -417,6 +417,24 @@ class ShardedSaliDataset(IterableDataset[tuple[torch.Tensor, torch.Tensor, torch
         shard_order = np.arange(len(self.shards))
         if self.shuffle:
             rng.shuffle(shard_order)
+        if self.count == self.total_count:
+            for shard_position, shard_pos in enumerate(shard_order):
+                if shard_position % worker_count != worker_id:
+                    continue
+                shard = self.shards[int(shard_pos)]
+                arrays = _load_shard_arrays(self.dataset_dir / shard.path)
+                row_order = np.arange(shard.count)
+                if self.shuffle:
+                    rng.shuffle(row_order)
+                for row in row_order:
+                    signals = arrays["signals"][int(row)]
+                    heatmap = arrays["heatmaps"][int(row)]
+                    yield (
+                        torch.from_numpy(signals[0:1]),
+                        torch.from_numpy(signals[1:2]),
+                        torch.from_numpy(heatmap),
+                    )
+            return
         position = 0
         for shard_pos in shard_order:
             shard = self.shards[int(shard_pos)]

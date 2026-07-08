@@ -6,9 +6,11 @@ import numpy as np
 import pytest
 import torch
 
-from sali.data import generate_indexed_sample
+from sali.data import NormalizationStats, generate_indexed_sample
 from sali.shards import (
     DEFAULT_SHARD_DTYPE,
+    ShardInfo,
+    ShardManifest,
     ShardedSaliDataset,
     generate_shards,
     load_shard_manifest,
@@ -107,6 +109,58 @@ def test_sharded_dataset_capped_shuffle_uses_global_sample_order(tiny_config, tm
     np.testing.assert_array_equal(signal32.numpy(), expected.signals[0:1])
     np.testing.assert_array_equal(signal256.numpy(), expected.signals[1:2])
     np.testing.assert_array_equal(heatmap.numpy(), expected.heatmap)
+
+
+def test_sharded_dataset_workers_load_disjoint_full_split_shards(tiny_config, tmp_path, monkeypatch) -> None:
+    class Worker:
+        def __init__(self, worker_id: int) -> None:
+            self.id = worker_id
+            self.num_workers = 2
+
+    manifest = ShardManifest(
+        schema_version=1,
+        data_mode="sharded",
+        config_hash="",
+        config={},
+        split_sizes={"train": 6},
+        shard_size=2,
+        dtypes={"signals": "float32", "raw_signals": "float32", "heatmaps": "float32"},
+        normalization_stats=NormalizationStats(mean=0.0, var=1.0, epsilon=tiny_config.data.norm_epsilon),
+        shards=[
+            ShardInfo("train", "train-000000.npz", 0, 2, 2),
+            ShardInfo("train", "train-000001.npz", 2, 4, 2),
+            ShardInfo("train", "train-000002.npz", 4, 6, 2),
+        ],
+        generated_at="",
+        completed_at="",
+    )
+    loaded: list[str] = []
+
+    def fake_load_shard_arrays(path):
+        loaded.append(path.name)
+        return {
+            "signals": np.zeros((2, 2, 1), dtype=np.float32),
+            "raw_signals": np.zeros((2, 2, 1), dtype=np.float32),
+            "heatmaps": np.zeros((2, 1, 1, 1), dtype=np.float32),
+            "nuclei_count": np.zeros(2, dtype=np.uint8),
+            "nuclei_az_khz": np.zeros((2, tiny_config.data.max_nuclei), dtype=np.float32),
+            "nuclei_aperp_khz": np.zeros((2, tiny_config.data.max_nuclei), dtype=np.float32),
+            "indices": np.arange(2, dtype=np.int64),
+        }
+
+    monkeypatch.setattr("sali.shards._load_shard_arrays", fake_load_shard_arrays)
+
+    monkeypatch.setattr("sali.shards.get_worker_info", lambda: Worker(0))
+    worker0 = list(ShardedSaliDataset(tiny_config, tmp_path, "train", manifest=manifest))
+    worker0_loaded = loaded[:]
+    loaded.clear()
+
+    monkeypatch.setattr("sali.shards.get_worker_info", lambda: Worker(1))
+    worker1 = list(ShardedSaliDataset(tiny_config, tmp_path, "train", manifest=manifest))
+
+    assert worker0_loaded == ["train-000000.npz", "train-000002.npz"]
+    assert loaded == ["train-000001.npz"]
+    assert len(worker0) + len(worker1) == 6
 
 
 def test_generate_shards_skips_existing_valid_shards(tiny_config, tmp_path) -> None:
