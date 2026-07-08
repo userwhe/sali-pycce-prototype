@@ -31,7 +31,9 @@ def ensure_repo() -> None:
         run(["git", "clone", "--branch", BRANCH, "--single-branch", REPO_URL, str(REPO_ROOT)])
     else:
         print(f"using existing repo clone: {REPO_ROOT}", flush=True)
-        run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT)
+        run(["git", "fetch", "origin", BRANCH], cwd=REPO_ROOT)
+        run(["git", "reset", "--hard", f"origin/{BRANCH}"], cwd=REPO_ROOT)
+    run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT)
     if not PROJECT_DIR.exists():
         raise RuntimeError(f"Expected project directory does not exist: {PROJECT_DIR}")
 
