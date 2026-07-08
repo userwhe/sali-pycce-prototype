@@ -353,13 +353,14 @@ class ShardedSaliDataset(IterableDataset[tuple[torch.Tensor, torch.Tensor, torch
         max_samples: int | None = None,
         epoch: int = 0,
         shuffle: bool = False,
+        manifest: ShardManifest | None = None,
     ) -> None:
         self.cfg = cfg
         self.dataset_dir = dataset_dir
         self.split = split
         self.epoch = int(epoch)
         self.shuffle = bool(shuffle)
-        self.manifest = load_shard_manifest(dataset_dir, cfg)
+        self.manifest = manifest if manifest is not None else load_shard_manifest(dataset_dir, cfg)
         self.shards = [shard for shard in self.manifest.shards if shard.split == split]
         if not self.shards:
             raise ValueError(f"manifest contains no shards for split {split}")

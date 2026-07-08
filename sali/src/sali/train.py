@@ -689,7 +689,7 @@ def train_sharded_model(
             best_state = _cpu_state_dict(model)
 
     val_loader = DataLoader(
-        ShardedSaliDataset(cfg, dataset_dir, "val"),
+        ShardedSaliDataset(cfg, dataset_dir, "val", manifest=manifest),
         batch_size=cfg.training.batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -704,6 +704,7 @@ def train_sharded_model(
                 max_samples=train_sample_count,
                 epoch=epoch,
                 shuffle=True,
+                manifest=manifest,
             ),
             batch_size=cfg.training.batch_size,
             shuffle=False,

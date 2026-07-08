@@ -337,6 +337,37 @@ def test_train_sharded_model_uses_samples_per_epoch(tiny_config, tmp_path, monke
     assert seen_train_lengths == [3]
 
 
+def test_train_sharded_model_reuses_validated_manifest(tiny_config, tmp_path, monkeypatch) -> None:
+    from sali.shards import generate_shards
+    from sali.train import train_sharded_model
+
+    class TinyNet(nn.Module):
+        def __init__(self, _cfg) -> None:
+            super().__init__()
+            self.weight = nn.Parameter(torch.tensor([0.0]))
+
+    def fake_run_epoch(model, _loader, _criterion, _device, optimizer) -> float:
+        if optimizer is not None:
+            with torch.no_grad():
+                model.weight.add_(1.0)
+            return 0.2
+        return 0.1
+
+    def fail_dataset_manifest_load(*_args, **_kwargs):
+        raise AssertionError("dataset construction must not revalidate the shard manifest")
+
+    dataset_dir = tmp_path / "dataset"
+    generate_shards(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+    tiny_config.output_dir = tmp_path / "sharded-shared-manifest"
+    tiny_config.training.batch_size = 2
+    tiny_config.training.max_epochs = 1
+    monkeypatch.setattr(train_module, "SaliNet", TinyNet)
+    monkeypatch.setattr(train_module, "_run_epoch", fake_run_epoch)
+    monkeypatch.setattr("sali.shards.load_shard_manifest", fail_dataset_manifest_load)
+
+    train_sharded_model(tiny_config, dataset_dir, checkpoint_every_epochs=1)
+
+
 def test_train_sharded_model_rejects_single_sample_epoch(tiny_config, tmp_path) -> None:
     from sali.shards import generate_shards
     from sali.train import train_sharded_model
