@@ -109,6 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-samples", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument(
         "--samples-per-epoch",
         type=int,
@@ -153,6 +154,8 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         cfg.training.max_epochs = args.epochs
     if args.batch_size is not None:
         cfg.training.batch_size = args.batch_size
+    if args.learning_rate is not None:
+        cfg.training.learning_rate = args.learning_rate
     if args.samples_per_epoch is not None:
         cfg.training.samples_per_epoch = args.samples_per_epoch
     if args.loss_type is not None:
