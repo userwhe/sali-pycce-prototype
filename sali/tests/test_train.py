@@ -368,6 +368,44 @@ def test_train_sharded_model_reuses_validated_manifest(tiny_config, tmp_path, mo
     train_sharded_model(tiny_config, dataset_dir, checkpoint_every_epochs=1)
 
 
+def test_train_sharded_model_skips_file_validation_at_startup(
+    tiny_config,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from sali.shards import generate_shards, load_shard_manifest
+    from sali.train import train_sharded_model
+
+    class TinyNet(nn.Module):
+        def __init__(self, _cfg) -> None:
+            super().__init__()
+            self.weight = nn.Parameter(torch.tensor([0.0]))
+
+    def fake_run_epoch(model, _loader, _criterion, _device, optimizer) -> float:
+        if optimizer is not None:
+            with torch.no_grad():
+                model.weight.add_(1.0)
+            return 0.2
+        return 0.1
+
+    dataset_dir = tmp_path / "dataset"
+    generate_shards(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+    manifest = load_shard_manifest(dataset_dir, tiny_config)
+    tiny_config.output_dir = tmp_path / "sharded-skip-startup-validation"
+    tiny_config.training.batch_size = 2
+    tiny_config.training.max_epochs = 1
+
+    def fake_load_manifest(_dataset_dir, _cfg, *, validate_files=True):
+        assert validate_files is False
+        return manifest
+
+    monkeypatch.setattr(train_module, "SaliNet", TinyNet)
+    monkeypatch.setattr(train_module, "_run_epoch", fake_run_epoch)
+    monkeypatch.setattr(train_module, "load_shard_manifest", fake_load_manifest)
+
+    train_sharded_model(tiny_config, dataset_dir, checkpoint_every_epochs=1)
+
+
 def test_train_sharded_model_rejects_single_sample_epoch(tiny_config, tmp_path) -> None:
     from sali.shards import generate_shards
     from sali.train import train_sharded_model

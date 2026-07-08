@@ -264,7 +264,12 @@ def generate_shards(
     return manifest
 
 
-def load_shard_manifest(dataset_dir: Path, cfg: RunConfig | None = None) -> ShardManifest:
+def load_shard_manifest(
+    dataset_dir: Path,
+    cfg: RunConfig | None = None,
+    *,
+    validate_files: bool = True,
+) -> ShardManifest:
     path = dataset_dir / "manifest.json"
     if not path.exists():
         raise FileNotFoundError(f"missing shard manifest: {path}")
@@ -273,6 +278,8 @@ def load_shard_manifest(dataset_dir: Path, cfg: RunConfig | None = None) -> Shar
         raise ValueError("unsupported shard manifest")
     if cfg is not None and manifest.config_hash != config_hash(cfg):
         raise ValueError("manifest does not match active run config")
+    if not validate_files:
+        return manifest
     for shard in manifest.shards:
         shard_path = dataset_dir / shard.path
         if cfg is None:

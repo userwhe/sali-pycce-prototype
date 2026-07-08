@@ -628,7 +628,7 @@ def train_sharded_model(
         raise ValueError("checkpoint_every_epochs must be at least 1")
     if num_workers < 0:
         raise ValueError("num_workers must be non-negative")
-    manifest = load_shard_manifest(dataset_dir, cfg)
+    manifest = load_shard_manifest(dataset_dir, cfg, validate_files=False)
     stats = manifest.normalization_stats
     train_sample_count = _training_samples_per_epoch(cfg, cfg.data.train_samples)
     drop_last = _validate_iterable_training_batches(
