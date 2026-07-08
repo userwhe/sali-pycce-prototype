@@ -52,6 +52,7 @@ from sali.plots import (
     plot_heatmap,
     plot_loss,
     plot_mae,
+    plot_mae_by_nuclei,
     plot_precision_recall,
     plot_signal_overlay,
     plot_spectra,
@@ -363,6 +364,7 @@ def run_materialized(cfg: RunConfig, args: argparse.Namespace, thresholds: list[
         save_json(cfg.output_dir / "metrics_by_true_count.json", summary)
         plot_precision_recall(metrics, cfg.output_dir / "figures" / "precision_recall.png")
         plot_mae(metrics, cfg.output_dir / "figures" / "mae.png")
+        plot_mae_by_nuclei(metrics, cfg.output_dir / "figures" / "mae_by_nuclei.png")
     make_example_plots(cfg, splits, result)
 
 
@@ -422,6 +424,7 @@ def run_streamed(cfg: RunConfig, args: argparse.Namespace, thresholds: list[floa
         save_json(cfg.output_dir / "metrics_by_true_count.json", summary)
         plot_precision_recall(metrics, cfg.output_dir / "figures" / "precision_recall.png")
         plot_mae(metrics, cfg.output_dir / "figures" / "mae.png")
+        plot_mae_by_nuclei(metrics, cfg.output_dir / "figures" / "mae_by_nuclei.png")
     sample = materialize_streamed_samples(cfg, "test", stats, max_samples=1)[0]
     make_example_plots_for_sample(cfg, sample, result.model, cfg.output_dir / "figures")
 
@@ -499,6 +502,7 @@ def run_sharded(cfg: RunConfig, args: argparse.Namespace, thresholds: list[float
         save_json(cfg.output_dir / "metrics_by_true_count.json", summary)
         plot_precision_recall(metrics, cfg.output_dir / "figures" / "precision_recall.png")
         plot_mae(metrics, cfg.output_dir / "figures" / "mae.png")
+        plot_mae_by_nuclei(metrics, cfg.output_dir / "figures" / "mae_by_nuclei.png")
     sample = materialize_sharded_samples(cfg, dataset_dir, "test", max_samples=1)[0]
     make_example_plots_for_sample(cfg, sample, result.model, cfg.output_dir / "figures")
 

@@ -208,10 +208,12 @@ def test_train_streamed_model_writes_resume_checkpoints_and_csv(tiny_config, tmp
     assert checkpoint["epoch"] == 1
     assert checkpoint["normalization_stats"]["mean"] == pytest.approx(stats.mean)
     assert len(result.history["train_loss"]) == 1
+    assert result.history["step"] == [4]
     assert all(tensor.device.type == "cpu" for tensor in best_state.values())
     with history_csv.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     assert rows[0]["epoch"] == "1"
+    assert rows[0]["step"] == "4"
     assert float(rows[0]["train_loss"]) == pytest.approx(result.history["train_loss"][0])
 
 
@@ -237,6 +239,7 @@ def test_train_streamed_model_resume_continues_next_epoch(tiny_config, tmp_path)
     assert checkpoint["epoch"] == 2
     assert len(result.history["train_loss"]) == 2
     assert len(result.history["val_loss"]) == 2
+    assert result.history["step"] == [4, 8]
 
 
 def test_train_sharded_model_writes_resume_checkpoints_and_csv(tiny_config, tmp_path) -> None:
@@ -267,6 +270,7 @@ def test_train_sharded_model_writes_resume_checkpoints_and_csv(tiny_config, tmp_
     assert checkpoint["epoch"] == 1
     assert checkpoint["normalization_stats"]["epsilon"] == pytest.approx(tiny_config.data.norm_epsilon)
     assert len(result.history["train_loss"]) == 1
+    assert result.history["step"] == [4]
     assert all(tensor.device.type == "cpu" for tensor in best_state.values())
 
 
@@ -297,6 +301,7 @@ def test_train_sharded_model_resume_continues_next_epoch(tiny_config, tmp_path) 
     assert checkpoint["epoch"] == 2
     assert len(result.history["train_loss"]) == 2
     assert len(result.history["val_loss"]) == 2
+    assert result.history["step"] == [4, 8]
 
 
 def test_train_sharded_model_uses_samples_per_epoch(tiny_config, tmp_path, monkeypatch) -> None:

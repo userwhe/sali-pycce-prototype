@@ -127,9 +127,12 @@ def main() -> None:
         ),
         markdown("## MAE"),
         code(
-            "from sali.plots import plot_mae\n\n"
+            "from sali.plots import plot_mae, plot_mae_by_nuclei\n\n"
             "path = cfg.output_dir / 'figures' / 'mae.png'\n"
             "plot_mae(metrics, path)\n"
+            "display(Image(filename=str(path)))\n"
+            "path = cfg.output_dir / 'figures' / 'mae_by_nuclei.png'\n"
+            "plot_mae_by_nuclei(metrics, path)\n"
             "display(Image(filename=str(path)))\n"
         ),
     ]

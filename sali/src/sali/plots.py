@@ -15,7 +15,7 @@ def _prepare_path(path: str | Path) -> Path:
     return output_path
 
 
-def _validate_history(history: dict[str, list[float]]) -> tuple[np.ndarray, np.ndarray]:
+def _validate_history(history: dict[str, list[float]]) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
     if not history:
         raise ValueError("history must include non-empty train_loss and val_loss")
     try:
@@ -25,9 +25,18 @@ def _validate_history(history: dict[str, list[float]]) -> tuple[np.ndarray, np.n
         raise ValueError("history must include train_loss and val_loss") from exc
     if train_loss.ndim != 1 or val_loss.ndim != 1 or train_loss.size == 0 or val_loss.size == 0:
         raise ValueError("history must include non-empty train_loss and val_loss")
+    if train_loss.size != val_loss.size:
+        raise ValueError("history train_loss and val_loss must have the same length")
     if not np.all(np.isfinite(train_loss)) or not np.all(np.isfinite(val_loss)):
         raise FloatingPointError("history losses must be finite")
-    return train_loss, val_loss
+    if "step" in history:
+        x_values = np.asarray(history["step"], dtype=np.float64)
+        if x_values.ndim != 1 or x_values.size != train_loss.size:
+            raise ValueError("history step values must match loss history length")
+        if not np.all(np.isfinite(x_values)):
+            raise FloatingPointError("history step values must be finite")
+        return train_loss, val_loss, x_values, "Step"
+    return train_loss, val_loss, np.arange(1, train_loss.size + 1, dtype=np.float64), "Epoch"
 
 
 def _validate_heatmap(heatmap: np.ndarray) -> np.ndarray:
@@ -66,13 +75,13 @@ def _finite_mean_or_nan(values: list[float]) -> float:
 
 
 def plot_loss(history: dict[str, list[float]], path: str | Path) -> None:
-    train_loss, val_loss = _validate_history(history)
+    train_loss, val_loss, x_values, x_label = _validate_history(history)
     output_path = _prepare_path(path)
     fig, ax = plt.subplots(figsize=(7, 4))
     try:
-        ax.plot(train_loss, label="train")
-        ax.plot(val_loss, label="validation")
-        ax.set_xlabel("Epoch")
+        ax.plot(x_values, train_loss, label="train")
+        ax.plot(x_values, val_loss, label="validation")
+        ax.set_xlabel(x_label)
         ax.set_ylabel("MSE")
         ax.legend()
         fig.tight_layout()
@@ -191,6 +200,34 @@ def plot_mae(results: list[SampleMetrics], path: str | Path) -> None:
         axes[1].set_xlabel("True nuclei")
         axes[1].set_ylabel("Signal MAE")
         axes[1].legend()
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=160)
+    finally:
+        plt.close(fig)
+
+
+def plot_mae_by_nuclei(results: list[SampleMetrics], path: str | Path) -> None:
+    _validate_results(results)
+    output_path = _prepare_path(path)
+    counts = sorted({result.true_nuclei for result in results})
+    mae_az = []
+    mae_aperp = []
+    mean_coupling = []
+    for count in counts:
+        selected = [result for result in results if result.true_nuclei == count]
+        az = _finite_mean_or_nan([item.mae_az_khz for item in selected])
+        aperp = _finite_mean_or_nan([item.mae_aperp_khz for item in selected])
+        mae_az.append(az)
+        mae_aperp.append(aperp)
+        mean_coupling.append(_finite_mean_or_nan([az, aperp]))
+    fig, ax = plt.subplots(figsize=(7, 4))
+    try:
+        ax.plot(counts, mean_coupling, marker="o", label="mean")
+        ax.plot(counts, mae_az, marker="o", linestyle="--", label="Az")
+        ax.plot(counts, mae_aperp, marker="o", linestyle="--", label="Aperp")
+        ax.set_xlabel("True nuclei")
+        ax.set_ylabel("Coupling MAE (kHz)")
+        ax.legend()
         fig.tight_layout()
         fig.savefig(output_path, dpi=160)
     finally:

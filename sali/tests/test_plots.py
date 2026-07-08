@@ -73,6 +73,32 @@ def test_plot_loss_accepts_string_path(tmp_path: Path) -> None:
     assert path.exists()
 
 
+def test_plot_loss_uses_recorded_steps_on_x_axis(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from matplotlib.axes import Axes
+
+    calls: list[tuple[str, list[np.ndarray]]] = []
+    original_plot = Axes.plot
+
+    def capture_plot(self: Axes, *args: object, **kwargs: object):
+        label = kwargs.get("label")
+        if label in {"train", "validation"}:
+            calls.append((str(label), [np.asarray(arg, dtype=np.float64) for arg in args]))
+        return original_plot(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "plot", capture_plot)
+
+    _plots().plot_loss(
+        {"step": [4, 8], "train_loss": [1.0, 0.5], "val_loss": [1.2, 0.6]},
+        tmp_path / "loss.png",
+    )
+
+    assert calls
+    assert all(len(args) == 2 for _label, args in calls)
+    assert calls[0][1][0].tolist() == [4.0, 8.0]
+
+
 def test_plot_loss_rejects_empty_history(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="history"):
         _plots().plot_loss({"train_loss": [], "val_loss": []}, tmp_path / "loss.png")
@@ -195,6 +221,18 @@ def test_plot_precision_recall_rejects_empty_results(tmp_path: Path) -> None:
 def test_plot_mae_writes_file(tmp_path: Path) -> None:
     path = tmp_path / "mae.png"
     _plots().plot_mae([_metric(true_nuclei=1), _metric(true_nuclei=2)], path)
+    assert path.exists()
+
+
+def test_plot_mae_by_nuclei_writes_file(tmp_path: Path) -> None:
+    path = tmp_path / "mae_by_nuclei.png"
+    _plots().plot_mae_by_nuclei(
+        [
+            _metric(true_nuclei=1, mae_az_khz=0.1, mae_aperp_khz=0.3),
+            _metric(true_nuclei=2, mae_az_khz=0.2, mae_aperp_khz=0.4),
+        ],
+        path,
+    )
     assert path.exists()
 
 

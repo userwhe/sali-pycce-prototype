@@ -141,15 +141,17 @@ def _save_history(path: Path, history: dict[str, list[float]]) -> None:
 
 def _save_history_csv(path: Path, history: dict[str, list[float]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["epoch", "train_loss", "val_loss", "lr"]
+    fieldnames = ["epoch", "step", "train_loss", "val_loss", "lr"]
     row_count = max((len(values) for values in history.values()), default=0)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for index in range(row_count):
+            step = history.get("step", [index + 1] * row_count)[index]
             writer.writerow(
                 {
                     "epoch": index + 1,
+                    "step": int(step) if float(step).is_integer() else step,
                     "train_loss": history.get("train_loss", [])[index],
                     "val_loss": history.get("val_loss", [])[index],
                     "lr": history.get("lr", [])[index],
@@ -206,6 +208,19 @@ def _effective_train_batch_count(sample_count: int, batch_size: int, drop_last: 
     return (sample_count + batch_size - 1) // batch_size
 
 
+def _iterable_effective_train_batch_count(
+    sample_count: int,
+    batch_size: int,
+    num_workers: int,
+    drop_last: bool,
+) -> int:
+    return sum(
+        _effective_train_batch_count(count, batch_size, drop_last)
+        for count in _iterable_worker_sample_counts(sample_count, num_workers)
+        if count > 0
+    )
+
+
 def _validate_training_batches(sample_count: int, batch_size: int) -> bool:
     if batch_size < 2:
         raise ValueError("training batch_size must be at least 2 for BatchNorm")
@@ -236,10 +251,11 @@ def _validate_iterable_training_batches(sample_count: int, batch_size: int, num_
         for count in worker_counts
         if count > 0
     )
-    effective_batches = sum(
-        _effective_train_batch_count(count, batch_size, drop_last)
-        for count in worker_counts
-        if count > 0
+    effective_batches = _iterable_effective_train_batch_count(
+        sample_count,
+        batch_size,
+        num_workers,
+        drop_last,
     )
     if effective_batches <= 0:
         raise ValueError("effective training batch count must be greater than 0")
@@ -323,6 +339,29 @@ def _resolve_resume_checkpoint(output_dir: Path, resume_from: Path | str) -> Pat
     return Path(resume_from)
 
 
+def _coerce_checkpoint_history(raw_history: object) -> dict[str, list[float]]:
+    return {
+        str(key): [float(value) for value in values]
+        for key, values in dict(raw_history).items()
+    }
+
+
+def _ensure_step_history(
+    history: dict[str, list[float]],
+    *,
+    steps_per_epoch: int,
+    completed_epochs: int,
+) -> int:
+    if "step" not in history or len(history["step"]) != completed_epochs:
+        history["step"] = [
+            float(steps_per_epoch * epoch)
+            for epoch in range(1, completed_epochs + 1)
+        ]
+    if not history["step"]:
+        return 0
+    return int(history["step"][-1])
+
+
 def _write_run_state(
     output_dir: Path,
     *,
@@ -347,6 +386,11 @@ def _write_run_state(
 def train_model(cfg: RunConfig, splits: DataSplits) -> TrainResult:
     train_sample_count = _training_samples_per_epoch(cfg, len(splits.train))
     drop_last = _validate_training_batches(train_sample_count, cfg.training.batch_size)
+    steps_per_epoch = _effective_train_batch_count(
+        train_sample_count,
+        cfg.training.batch_size,
+        drop_last,
+    )
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     device = choose_device(cfg.training.device)
     _set_torch_seed(cfg.data.seed)
@@ -365,7 +409,7 @@ def train_model(cfg: RunConfig, splits: DataSplits) -> TrainResult:
         patience=cfg.training.lr_plateau_patience,
         min_lr=1e-8,
     )
-    history: dict[str, list[float]] = {"train_loss": [], "val_loss": [], "lr": []}
+    history: dict[str, list[float]] = {"step": [], "train_loss": [], "val_loss": [], "lr": []}
     best_loss = float("inf")
     early_stopping_loss = float("inf")
     best_state = _cpu_state_dict(model)
@@ -389,6 +433,7 @@ def train_model(cfg: RunConfig, splits: DataSplits) -> TrainResult:
         val_loss = _run_epoch(model, val_loader, criterion, device, None)
         scheduler.step(val_loss)
         lr = float(optimizer.param_groups[0]["lr"])
+        history["step"].append(steps_per_epoch * epoch)
         history["train_loss"].append(float(train_loss))
         history["val_loss"].append(float(val_loss))
         history["lr"].append(lr)
@@ -430,6 +475,12 @@ def train_streamed_model(
         cfg.training.batch_size,
         num_workers,
     )
+    steps_per_epoch = _iterable_effective_train_batch_count(
+        train_sample_count,
+        cfg.training.batch_size,
+        num_workers,
+        drop_last,
+    )
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = cfg.output_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -445,7 +496,7 @@ def train_streamed_model(
         patience=cfg.training.lr_plateau_patience,
         min_lr=1e-8,
     )
-    history: dict[str, list[float]] = {"train_loss": [], "val_loss": [], "lr": []}
+    history: dict[str, list[float]] = {"step": [], "train_loss": [], "val_loss": [], "lr": []}
     best_loss = float("inf")
     early_stopping_loss = float("inf")
     best_checkpoint = cfg.output_dir / "best_model.pt"
@@ -461,14 +512,16 @@ def train_streamed_model(
             scheduler=scheduler,
             device=device,
         )
-        history = {
-            key: [float(value) for value in values]
-            for key, values in dict(checkpoint["history"]).items()
-        }
+        history = _coerce_checkpoint_history(checkpoint["history"])
         best_loss = float(checkpoint["best_loss"])
         early_stopping_loss = float(checkpoint["early_stopping_loss"])
         stale_epochs = int(checkpoint["stale_epochs"])
         start_epoch = int(checkpoint["epoch"]) + 1
+        _ensure_step_history(
+            history,
+            steps_per_epoch=steps_per_epoch,
+            completed_epochs=start_epoch - 1,
+        )
         if best_checkpoint.exists():
             best_state = torch.load(best_checkpoint, map_location="cpu", weights_only=True)
         else:
@@ -500,6 +553,7 @@ def train_streamed_model(
         val_loss = _run_epoch(model, val_loader, criterion, device, None)
         scheduler.step(val_loss)
         lr = float(optimizer.param_groups[0]["lr"])
+        history["step"].append(steps_per_epoch * epoch)
         history["train_loss"].append(float(train_loss))
         history["val_loss"].append(float(val_loss))
         history["lr"].append(lr)
@@ -582,6 +636,12 @@ def train_sharded_model(
         cfg.training.batch_size,
         num_workers,
     )
+    steps_per_epoch = _iterable_effective_train_batch_count(
+        train_sample_count,
+        cfg.training.batch_size,
+        num_workers,
+        drop_last,
+    )
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = cfg.output_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -597,7 +657,7 @@ def train_sharded_model(
         patience=cfg.training.lr_plateau_patience,
         min_lr=1e-8,
     )
-    history: dict[str, list[float]] = {"train_loss": [], "val_loss": [], "lr": []}
+    history: dict[str, list[float]] = {"step": [], "train_loss": [], "val_loss": [], "lr": []}
     best_loss = float("inf")
     early_stopping_loss = float("inf")
     best_checkpoint = cfg.output_dir / "best_model.pt"
@@ -613,14 +673,16 @@ def train_sharded_model(
             scheduler=scheduler,
             device=device,
         )
-        history = {
-            key: [float(value) for value in values]
-            for key, values in dict(checkpoint["history"]).items()
-        }
+        history = _coerce_checkpoint_history(checkpoint["history"])
         best_loss = float(checkpoint["best_loss"])
         early_stopping_loss = float(checkpoint["early_stopping_loss"])
         stale_epochs = int(checkpoint["stale_epochs"])
         start_epoch = int(checkpoint["epoch"]) + 1
+        _ensure_step_history(
+            history,
+            steps_per_epoch=steps_per_epoch,
+            completed_epochs=start_epoch - 1,
+        )
         if best_checkpoint.exists():
             best_state = torch.load(best_checkpoint, map_location="cpu", weights_only=True)
         else:
@@ -652,6 +714,7 @@ def train_sharded_model(
         val_loss = _run_epoch(model, val_loader, criterion, device, None)
         scheduler.step(val_loss)
         lr = float(optimizer.param_groups[0]["lr"])
+        history["step"].append(steps_per_epoch * epoch)
         history["train_loss"].append(float(train_loss))
         history["val_loss"].append(float(val_loss))
         history["lr"].append(lr)
