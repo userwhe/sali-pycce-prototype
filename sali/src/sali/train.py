@@ -333,6 +333,13 @@ def _load_full_checkpoint(
     return checkpoint
 
 
+def _override_optimizer_learning_rate(optimizer: Adam, learning_rate: float | None) -> None:
+    if learning_rate is None:
+        return
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = float(learning_rate)
+
+
 def _resolve_resume_checkpoint(output_dir: Path, resume_from: Path | str) -> Path:
     if str(resume_from) == "latest":
         return output_dir / "checkpoints" / "latest.pt"
@@ -462,6 +469,7 @@ def train_streamed_model(
     *,
     checkpoint_every_epochs: int = 1,
     resume_from: Path | str | None = None,
+    resume_learning_rate: float | None = None,
     num_workers: int = 0,
     epoch_callback: Callable[[int, SaliNet, dict[str, list[float]]], None] | None = None,
 ) -> TrainResult:
@@ -512,6 +520,7 @@ def train_streamed_model(
             scheduler=scheduler,
             device=device,
         )
+        _override_optimizer_learning_rate(optimizer, resume_learning_rate)
         history = _coerce_checkpoint_history(checkpoint["history"])
         best_loss = float(checkpoint["best_loss"])
         early_stopping_loss = float(checkpoint["early_stopping_loss"])
@@ -621,6 +630,7 @@ def train_sharded_model(
     *,
     checkpoint_every_epochs: int = 1,
     resume_from: Path | str | None = None,
+    resume_learning_rate: float | None = None,
     num_workers: int = 0,
     epoch_callback: Callable[[int, SaliNet, dict[str, list[float]]], None] | None = None,
 ) -> TrainResult:
@@ -673,6 +683,7 @@ def train_sharded_model(
             scheduler=scheduler,
             device=device,
         )
+        _override_optimizer_learning_rate(optimizer, resume_learning_rate)
         history = _coerce_checkpoint_history(checkpoint["history"])
         best_loss = float(checkpoint["best_loss"])
         early_stopping_loss = float(checkpoint["early_stopping_loss"])

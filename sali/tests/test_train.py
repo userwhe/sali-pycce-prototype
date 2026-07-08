@@ -304,6 +304,56 @@ def test_train_sharded_model_resume_continues_next_epoch(tiny_config, tmp_path) 
     assert result.history["step"] == [4, 8]
 
 
+def test_train_sharded_model_resume_can_override_checkpoint_learning_rate(
+    tiny_config,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from sali.shards import generate_shards
+    from sali.train import train_sharded_model
+
+    class TinyNet(nn.Module):
+        def __init__(self, _cfg) -> None:
+            super().__init__()
+            self.weight = nn.Parameter(torch.tensor([0.0]))
+
+    seen_train_lrs: list[float] = []
+
+    def fake_run_epoch(model, _loader, _criterion, _device, optimizer) -> float:
+        if optimizer is not None:
+            seen_train_lrs.append(float(optimizer.param_groups[0]["lr"]))
+            with torch.no_grad():
+                model.weight.add_(1.0)
+            return 0.2
+        return 0.1
+
+    dataset_dir = tmp_path / "dataset"
+    run_dir = tmp_path / "sharded-resume-lr"
+    generate_shards(tiny_config, dataset_dir, shard_size=4, normalization_samples=4)
+    tiny_config.output_dir = run_dir
+    tiny_config.training.batch_size = 2
+    tiny_config.training.max_epochs = 1
+    tiny_config.training.learning_rate = 0.001
+    monkeypatch.setattr(train_module, "SaliNet", TinyNet)
+    monkeypatch.setattr(train_module, "_run_epoch", fake_run_epoch)
+
+    train_sharded_model(tiny_config, dataset_dir, checkpoint_every_epochs=1)
+
+    resume_cfg = copy.deepcopy(tiny_config)
+    resume_cfg.training.max_epochs = 2
+    resume_cfg.training.learning_rate = 0.002
+    latest = run_dir / "checkpoints" / "latest.pt"
+    train_sharded_model(
+        resume_cfg,
+        dataset_dir,
+        checkpoint_every_epochs=1,
+        resume_from=latest,
+        resume_learning_rate=resume_cfg.training.learning_rate,
+    )
+
+    assert seen_train_lrs == pytest.approx([0.001, 0.002])
+
+
 def test_train_sharded_model_uses_samples_per_epoch(tiny_config, tmp_path, monkeypatch) -> None:
     from sali.shards import generate_shards
     from sali.train import train_sharded_model

@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tarfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -79,6 +80,57 @@ def test_train_colab_applies_learning_rate(monkeypatch) -> None:
     cfg = config_from_args(args)
 
     assert cfg.training.learning_rate == pytest.approx(0.002)
+
+
+def test_train_colab_passes_learning_rate_as_sharded_resume_override(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from scripts import train_colab
+
+    cfg = train_colab.paper_config("low")
+    cfg.output_dir = tmp_path / "run"
+    cfg.training.learning_rate = 0.002
+    captured: dict[str, float | None] = {}
+
+    def fake_train_sharded_model(
+        _cfg,
+        _dataset_dir,
+        *,
+        checkpoint_every_epochs,
+        resume_from,
+        num_workers,
+        epoch_callback,
+        resume_learning_rate,
+    ):
+        captured["resume_learning_rate"] = resume_learning_rate
+        return SimpleNamespace(model=object(), history={"step": [], "train_loss": [], "val_loss": [], "lr": []})
+
+    args = SimpleNamespace(
+        generate_shards=False,
+        checkpoint_every_epochs=1,
+        resume="latest",
+        learning_rate=0.002,
+        num_workers=4,
+        diagnostic_samples=64,
+        threshold_mode="fixed",
+        disable_diagnostic_morphology=True,
+        no_final_eval=True,
+        full_test_eval=False,
+        max_eval_samples=64,
+    )
+    monkeypatch.setattr(train_colab, "resolve_dataset_dir", lambda _cfg, _args: tmp_path / "dataset")
+    monkeypatch.setattr(train_colab, "train_sharded_model", fake_train_sharded_model)
+    monkeypatch.setattr(train_colab, "plot_loss", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(train_colab, "sharded_sample_views", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(train_colab, "diagnose_splits", lambda *_args, **_kwargs: {"val": {"threshold_sweep": []}})
+    monkeypatch.setattr(train_colab, "save_json", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(train_colab, "materialize_sharded_samples", lambda *_args, **_kwargs: [object()])
+    monkeypatch.setattr(train_colab, "make_example_plots_for_sample", lambda *_args, **_kwargs: None)
+
+    train_colab.run_sharded(cfg, args, thresholds=[0.5])
+
+    assert captured["resume_learning_rate"] == pytest.approx(0.002)
 
 
 def test_train_colab_sets_writable_matplotlib_config(monkeypatch) -> None:

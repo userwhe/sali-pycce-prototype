@@ -395,6 +395,7 @@ def run_streamed(cfg: RunConfig, args: argparse.Namespace, thresholds: list[floa
         stats,
         checkpoint_every_epochs=args.checkpoint_every_epochs,
         resume_from=args.resume,
+        resume_learning_rate=args.learning_rate,
         num_workers=args.num_workers,
         epoch_callback=epoch_callback,
     )
@@ -473,6 +474,7 @@ def run_sharded(cfg: RunConfig, args: argparse.Namespace, thresholds: list[float
         dataset_dir,
         checkpoint_every_epochs=args.checkpoint_every_epochs,
         resume_from=args.resume,
+        resume_learning_rate=args.learning_rate,
         num_workers=args.num_workers,
         epoch_callback=epoch_callback,
     )
