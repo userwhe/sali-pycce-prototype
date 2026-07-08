@@ -73,7 +73,7 @@ def train_command(output_dir: Path, dataset_dir: Path) -> list[str]:
         "--diagnostic-samples",
         "64",
         "--num-workers",
-        "2",
+        "4",
     ]
 
 
